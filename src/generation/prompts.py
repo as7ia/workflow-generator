@@ -14,7 +14,12 @@ def build_generation_prompt(description: str, schema: dict[str, Any]) -> str:
         f"JSON Schema officiel :\n{json.dumps(schema, ensure_ascii=False, indent=2, sort_keys=True)}\n\n"
         "Retourne uniquement un objet JSON valide. N'utilise ni Markdown, ni bloc de code, ni explication.\n"
         "Utilise source et target comme propriétés canoniques des flux.\n"
+        "Ne produis jamais sourceRef ou targetRef dans le résultat final.\n"
         "Distingue les sequence flows internes d'un participant des messageFlows entre participants ou pools.\n"
+        "messageFlow n'est jamais un type de node et doit uniquement apparaître dans messageFlows.\n"
+        "Aucun nœud isolé n'est autorisé : toutes les tâches doivent être reliées par des sequence flows ou des message flows appropriés.\n"
+        "Les flux sortant d'une parallelGateway ne doivent porter aucune condition.\n"
+        "Types de nœuds autorisés : startEvent, endEvent, userTask, serviceTask, manualTask, scriptTask, businessRuleTask, exclusiveGateway, parallelGateway, inclusiveGateway, eventBasedGateway, subProcess, intermediateCatchEvent, intermediateThrowEvent.\n"
         "Gère les participants, pools, lanes et leurs nodeRefs lorsque la description les exige.\n"
         "Utilise correctement les passerelles exclusiveGateway, parallelGateway et inclusiveGateway.\n"
         "Exprime les durées de timer au format ISO 8601.\n"
@@ -33,6 +38,16 @@ def build_repair_prompt(
         for error in errors
         if isinstance(error, dict)
     ] or ["- Le workflow ne satisfait pas les validations."]
+    codes = {error.get("code") for error in errors if isinstance(error, dict)}
+    messages = " ".join(str(error.get("message", "")) for error in errors if isinstance(error, dict)).lower()
+    targeted = []
+    if "JSON_SCHEMA_ERROR" in codes and "messageflow" in messages.replace(" ", ""):
+        targeted.append("Déplace l'élément messageFlow de nodes vers messageFlows.")
+    if "ISOLATED_TASK" in codes:
+        targeted.append("Connecte la tâche isolée si elle est métier; sinon supprime-la si elle est réellement inutile.")
+    if "PARALLEL_GATEWAY_CONDITION" in codes:
+        targeted.append("Supprime toutes les conditions des sorties de la parallelGateway.")
+    targeted_text = "\n".join(targeted)
     return (
         "Le workflow JSON suivant est invalide. Corrige uniquement sa représentation JSON.\n\n"
         f"Erreurs détectées :\n{'\n'.join(error_lines)}\n\n"
@@ -41,5 +56,9 @@ def build_repair_prompt(
         "Conserve l'intention métier, les branches utiles, participants, pools, lanes, sequence flows et messageFlows.\n"
         "Corrige les références, événements, passerelles, conditions et timers nécessaires sans renommer les identifiants valides.\n"
         "Utilise source et target comme propriétés canoniques.\n"
+        "Ne retourne jamais sourceRef ou targetRef.\n"
+        "Types de nœuds autorisés : startEvent, endEvent, userTask, serviceTask, manualTask, scriptTask, businessRuleTask, exclusiveGateway, parallelGateway, inclusiveGateway, eventBasedGateway, subProcess, intermediateCatchEvent, intermediateThrowEvent.\n"
+        "messageFlow doit uniquement apparaître dans messageFlows.\n"
+        f"{targeted_text}\n"
         "Retourne uniquement un objet JSON valide, sans Markdown, commentaire ou explication."
     )

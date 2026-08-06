@@ -269,6 +269,9 @@
         "id": {
           "$ref": "#/$defs/identifier"
         },
+        "name": {
+          "type": "string"
+        },
         "source": {
           "$ref": "#/$defs/identifier"
         },
@@ -307,6 +310,9 @@
       "properties": {
         "id": {
           "$ref": "#/$defs/identifier"
+        },
+        "name": {
+          "type": "string"
         },
         "source": {
           "$ref": "#/$defs/identifier"

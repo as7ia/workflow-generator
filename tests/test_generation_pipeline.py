@@ -236,6 +236,45 @@ class WorkflowCompilerTests(unittest.TestCase):
         self.assertTrue(result["success"], result)
         self.assertNotEqual(result["layout"]["nodes"]["a"]["y"], result["layout"]["nodes"]["b"]["y"])
 
+    def test_pipeline_fixes_misplaced_message_parallel_conditions_and_orphan(self) -> None:
+        raw = valid_workflow(
+            nodes=[
+                {"id": "start", "type": "startEvent", "name": "Start", "actor": None, "properties": {}},
+                {"id": "split", "type": "parallelGateway", "name": "Split", "actor": None, "properties": {"gatewayDirection": "diverging"}},
+                {"id": "a", "type": "serviceTask", "name": "A", "actor": "system", "properties": {}},
+                {"id": "b", "type": "serviceTask", "name": "B", "actor": "system", "properties": {}},
+                {"id": "join", "type": "parallelGateway", "name": "Join", "actor": None, "properties": {"gatewayDirection": "converging"}},
+                {"id": "end", "type": "endEvent", "name": "End", "actor": None, "properties": {}},
+                {"id": "orphan", "type": "serviceTask", "name": "Unused", "actor": "system", "properties": {}},
+                {"id": "message", "type": "messageFlow", "name": "Communication", "source": "a", "target": "b"},
+            ],
+            flows=[
+                {"id": "1", "source": "start", "target": "split", "condition": None, "isDefault": False},
+                {"id": "2", "source": "split", "target": "a", "condition": "${left}", "isDefault": False},
+                {"id": "3", "source": "split", "target": "b", "conditionExpression": "${right}", "isDefault": False},
+                {"id": "4", "source": "a", "target": "join", "condition": None, "isDefault": False},
+                {"id": "5", "source": "b", "target": "join", "condition": None, "isDefault": False},
+                {"id": "6", "source": "join", "target": "end", "condition": None, "isDefault": False},
+            ],
+        )
+        generator = FakeGenerator(raw)
+        result = WorkflowCompiler(generator, SCHEMA_PATH).compile("Processus générique")
+        self.assertTrue(result["success"], result)
+        self.assertEqual(1, len(generator.prompts))
+        self.assertNotIn("orphan", {node["id"] for node in result["normalized_workflow"]["nodes"]})
+        self.assertIn("message", {item["id"] for item in result["normalized_workflow"]["messageFlows"]})
+        self.assertTrue(all(flow["condition"] is None for flow in result["normalized_workflow"]["flows"] if flow["source"] == "split"))
+        self.assertIn("REMOVED_ISOLATED_NODE", {warning["code"] for warning in result["warnings"]})
+
+    def test_corrections_contain_no_refund_specific_rule(self) -> None:
+        sources = [
+            Path(__file__).resolve().parents[1] / "src" / "workflow" / "normalizer.py",
+            Path(__file__).resolve().parents[1] / "src" / "generation" / "pipeline.py",
+            Path(__file__).resolve().parents[1] / "src" / "generation" / "prompts.py",
+        ]
+        combined = "\n".join(path.read_text(encoding="utf-8").lower() for path in sources)
+        self.assertNotIn("remboursement", combined)
+
     def test_prompt_builders_include_schema_and_canonical_keys(self) -> None:
         schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
         generation = build_generation_prompt("Description", schema)

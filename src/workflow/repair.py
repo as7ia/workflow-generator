@@ -60,6 +60,7 @@ class WorkflowRepairer:
         """
         original = copy.deepcopy(workflow) if isinstance(workflow, Mapping) else {}
         current = self._normalizer.normalize(original)
+        current, _ = self._normalizer.apply_safe_repairs(current)
         current_errors = self._validate(current)
         report: list[RepairAttempt] = []
 
@@ -110,6 +111,7 @@ class WorkflowRepairer:
                 continue
 
             candidate = self._normalizer.normalize(copy.deepcopy(dict(generated)))
+            candidate, _ = self._normalizer.apply_safe_repairs(candidate)
             output_errors = self._validate(candidate)
             candidate_score = self._score(output_errors)
             if candidate_score < best_score:
@@ -161,6 +163,18 @@ class WorkflowRepairer:
             error_lines.append("- Le workflow ne satisfait pas les validations structurelles ou sémantiques.")
 
         serialized = json.dumps(workflow, ensure_ascii=False, indent=2, sort_keys=True)
+        codes = {error.get("code") for error in errors if isinstance(error, Mapping)}
+        messages = " ".join(
+            str(error.get("message", "")) for error in errors if isinstance(error, Mapping)
+        ).lower()
+        targeted: list[str] = []
+        if "JSON_SCHEMA_ERROR" in codes and "messageflow" in messages.replace(" ", ""):
+            targeted.append("Déplace tout messageFlow présent dans nodes vers la collection messageFlows.")
+        if "ISOLATED_TASK" in codes:
+            targeted.append("Connecte correctement toute tâche métier isolée; supprime-la uniquement si elle est inutile.")
+        if "PARALLEL_GATEWAY_CONDITION" in codes:
+            targeted.append("Supprime toutes les conditions des flux sortant d'une parallelGateway.")
+        targeted_text = "\n".join(targeted)
         return (
             "Le workflow JSON suivant est invalide.\n\n"
             "Erreurs détectées :\n"
@@ -176,6 +190,9 @@ class WorkflowRepairer:
             "Corrige les passerelles et ajoute les conditions manquantes aux sorties des passerelles exclusives.\n"
             "Ne modifie pas les identifiants déjà valides sans raison.\n"
             "Préserve les participants, pools, lanes, sequence flows et message flows.\n"
+            "Types de nœuds autorisés : startEvent, endEvent, userTask, serviceTask, manualTask, scriptTask, businessRuleTask, exclusiveGateway, parallelGateway, inclusiveGateway, eventBasedGateway, subProcess, intermediateCatchEvent, intermediateThrowEvent.\n"
+            "messageFlow doit uniquement apparaître dans messageFlows et jamais comme type de nœud.\n"
+            f"{targeted_text}\n"
             "Retourne uniquement un objet JSON valide, sans Markdown, sans commentaire et sans explication."
         )
 
@@ -229,52 +246,7 @@ class WorkflowRepairer:
         itself is versioned.
         """
         schema_path = Path(__file__).resolve().parents[2] / "schemas" / "workflow.schema.json"
-        schema = json.loads(schema_path.read_text(encoding="utf-8"))
-        effective = copy.deepcopy(schema)
-        flow = effective["$defs"]["flow"]
-        flow["required"] = ["id", "sourceRef", "targetRef", "condition", "isDefault"]
-        flow["properties"]["sourceRef"] = flow["properties"].pop("source")
-        flow["properties"]["targetRef"] = flow["properties"].pop("target")
-        flow["properties"]["type"] = {
-            "type": "string",
-            "enum": ["sequenceFlow", "sequence", "messageFlow", "message"],
-        }
-        flow["properties"]["properties"] = {"type": "object"}
-
-        message_flow = effective["$defs"].get("messageFlow")
-        if message_flow is not None:
-            message_flow["required"] = ["id", "sourceRef", "targetRef"]
-            message_flow["properties"]["sourceRef"] = message_flow["properties"].pop("source")
-            message_flow["properties"]["targetRef"] = message_flow["properties"].pop("target")
-
-        node_types = effective["$defs"]["node"]["properties"]["type"]["enum"]
-        node_types.extend(["inclusiveGateway", "subProcess"])
-        null_actor_types = effective["$defs"]["node"]["allOf"][1]["if"]["properties"]["type"]["enum"]
-        null_actor_types.append("inclusiveGateway")
-
-        participant = effective["$defs"]["participant"]
-        participant["properties"].update(
-            {
-                "lanes": {"type": "array"},
-                "nodeRefs": {"type": "array", "items": {"$ref": "#/$defs/identifier"}},
-                "properties": {"type": "object"},
-            }
-        )
-        lane = {
-            "type": "object",
-            "additionalProperties": False,
-            "required": ["id", "name", "nodeRefs"],
-            "properties": {
-                "id": {"$ref": "#/$defs/identifier"},
-                "name": {"type": "string", "minLength": 1},
-                "nodeRefs": {"type": "array", "items": {"$ref": "#/$defs/identifier"}},
-                "properties": {"type": "object"},
-            },
-        }
-        effective["$defs"]["lane"] = lane
-        effective["properties"]["lanes"] = {"type": "array", "items": {"$ref": "#/$defs/lane"}}
-        effective["properties"]["messageFlows"] = {"type": "array", "items": {"$ref": "#/$defs/flow"}}
-        return effective
+        return json.loads(schema_path.read_text(encoding="utf-8"))
 
 
 class _StandardSchemaValidator:

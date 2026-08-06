@@ -79,10 +79,14 @@ class WorkflowCompiler:
                 dict(raw)
             )
             normalized = self._to_canonical_schema_flows(normalized)
+            normalized, safe_repair_report = self._apply_safe_repairs(
+                normalized, []
+            )
             result["normalized_workflow"] = normalized
             result["warnings"].extend(
                 entry for entry in normalization_report if entry.get("severity") == "warning"
             )
+            result["warnings"].extend(safe_repair_report)
         except Exception as exc:
             return self._fail(result, "normalization", exc)
 
@@ -104,7 +108,11 @@ class WorkflowCompiler:
                     generator=self.generator,
                 )
                 normalized = self._to_canonical_schema_flows(repaired_workflow)
+                normalized, safe_repair_report = self._apply_safe_repairs(
+                    normalized, blocking
+                )
                 result["normalized_workflow"] = normalized
+                result["warnings"].extend(safe_repair_report)
                 result["repair_report"] = repair_report
                 result["schema_errors"] = self._validate_schema(normalized, schema)
                 result["semantic_errors"] = self._semantic_validator.validate(normalized)
@@ -230,6 +238,17 @@ class WorkflowCompiler:
             for error in group
             if error.get("severity", "error") == "error"
         ]
+
+    def _apply_safe_repairs(
+        self, workflow: dict[str, Any], errors: list[dict[str, Any]]
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """Apply conservative deterministic corrections before validation.
+
+        ``errors`` is accepted for future code-targeted repairs; isolation is
+        established from references in the workflow itself and never guessed.
+        """
+        del errors
+        return self._normalizer.apply_safe_repairs(workflow)
 
     @classmethod
     def _to_canonical_schema_flows(cls, workflow: dict[str, Any]) -> dict[str, Any]:

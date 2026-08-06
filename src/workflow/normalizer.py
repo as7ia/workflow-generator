@@ -79,15 +79,15 @@ class WorkflowNormalizer:
         "messageFlows": ("messageFlows", "message_flows", "messages", "communications"),
     }
     _FLOW_REF_ALIASES = {
-        "sourceRef": ("sourceRef", "source", "source_id", "from"),
-        "targetRef": ("targetRef", "target", "target_id", "to"),
+        "source": ("source", "sourceRef", "source_id", "from"),
+        "target": ("target", "targetRef", "target_id", "to"),
     }
     _ALLOWED_FIELDS = {
         "process": {"id", "name", "description", "executable"},
         "participant": {"id", "name", "type", "lanes", "nodeRefs", "properties"},
         "lane": {"id", "name", "nodeRefs", "properties"},
         "node": {"id", "type", "name", "actor", "properties", "lanes", "nodeRefs"},
-        "flow": {"id", "sourceRef", "targetRef", "condition", "isDefault", "type", "properties"},
+        "flow": {"id", "name", "source", "target", "condition", "isDefault", "type", "properties"},
         "ambiguity": {"id", "message", "relatedNode", "severity"},
     }
     _SCHEMA_1_EXTENSION_KEYS = {"lanes", "messageFlows", "sourceRef", "targetRef"}
@@ -127,7 +127,10 @@ class WorkflowNormalizer:
         )
         result["participants"] = participants
 
-        nodes, node_ids = self._normalize_nodes(source.get("nodes"), used_ids, report)
+        raw_nodes, misplaced_messages = self._extract_misplaced_message_flows(
+            source.get("nodes"), report
+        )
+        nodes, node_ids = self._normalize_nodes(raw_nodes, used_ids, report)
         self._normalize_node_actors(nodes, participant_ids, report)
         self._finalize_participant_lanes(participants, used_ids, node_ids, report)
         result["nodes"] = nodes
@@ -144,6 +147,10 @@ class WorkflowNormalizer:
             self._report_schema_extension(report, "lanes")
 
         raw_messages, message_alias = self._aliased_value(source, "messageFlows", None)
+        if misplaced_messages:
+            existing_messages = raw_messages if isinstance(raw_messages, list) else []
+            raw_messages = [*existing_messages, *misplaced_messages]
+            message_alias = message_alias or "messageFlows"
         if raw_messages is not None:
             if message_alias != "messageFlows":
                 self._report_alias(report, str(message_alias), "messageFlows")
@@ -158,11 +165,126 @@ class WorkflowNormalizer:
             )
             self._report_schema_extension(report, "messageFlows")
 
+        self._remove_parallel_gateway_conditions(result["nodes"], result["flows"], report)
+
         result["ambiguities"] = self._normalize_ambiguities(
             source.get("ambiguities"), used_ids, node_ids, report
         )
         self._report_unknown_fields(source, self._source_top_level_keys(), "", report)
         return result, report
+
+    def apply_safe_repairs(
+        self, workflow: dict[str, Any]
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """Return a copy with only context-proven isolated tasks removed."""
+        result = copy.deepcopy(workflow) if isinstance(workflow, Mapping) else {}
+        report: list[dict[str, Any]] = []
+        self._remove_safe_isolated_tasks(result, report)
+        return result, report
+
+    def _extract_misplaced_message_flows(
+        self, raw_nodes: Any, report: list[NormalizationEntry]
+    ) -> tuple[Any, list[dict[str, Any]]]:
+        """Move communication elements incorrectly emitted inside ``nodes``."""
+        if not isinstance(raw_nodes, list):
+            return raw_nodes, []
+        nodes: list[Any] = []
+        messages: list[dict[str, Any]] = []
+        for index, raw_node in enumerate(raw_nodes):
+            if not isinstance(raw_node, Mapping):
+                nodes.append(raw_node)
+                continue
+            raw_type = raw_node.get("type")
+            normalized_type = (
+                re.sub(r"[\s-]+", "_", raw_type.strip()).lower()
+                if isinstance(raw_type, str)
+                else ""
+            )
+            if normalized_type not in {"messageflow", "message_flow", "message"}:
+                nodes.append(raw_node)
+                continue
+            source, _ = self._first_value(raw_node, self._FLOW_REF_ALIASES["source"])
+            target, _ = self._first_value(raw_node, self._FLOW_REF_ALIASES["target"])
+            if source is not None and target is not None:
+                messages.append(dict(raw_node))
+                self._report(
+                    report,
+                    "MISPLACED_MESSAGE_FLOW_MOVED",
+                    "Élément de communication déplacé de nodes vers messageFlows.",
+                    f"nodes[{index}]",
+                    "warning",
+                )
+            else:
+                self._report(
+                    report,
+                    "INVALID_MESSAGE_FLOW_NODE_REMOVED",
+                    "Faux nœud messageFlow supprimé car sa source ou sa cible est absente.",
+                    f"nodes[{index}]",
+                    "warning",
+                )
+        return nodes, messages
+
+    def _remove_parallel_gateway_conditions(
+        self,
+        nodes: list[dict[str, Any]],
+        flows: list[dict[str, Any]],
+        report: list[NormalizationEntry],
+    ) -> None:
+        """Remove conditions from outgoing parallel-gateway sequence flows."""
+        parallel_ids = {
+            node["id"] for node in nodes if node.get("type") == "parallelGateway"
+        }
+        for index, flow in enumerate(flows):
+            if flow.get("source") not in parallel_ids or flow.get("condition") in (None, ""):
+                continue
+            flow["condition"] = None
+            self._report(
+                report,
+                "PARALLEL_GATEWAY_CONDITION_REMOVED",
+                "Condition supprimée d'un flux sortant d'une passerelle parallèle.",
+                f"flows[{index}].condition",
+            )
+
+    def _remove_safe_isolated_tasks(
+        self, workflow: dict[str, Any], report: list[dict[str, Any]]
+    ) -> None:
+        """Remove only unreferenced isolated tasks, never events or business-linked tasks."""
+        task_types = {"userTask", "serviceTask", "manualTask", "scriptTask", "businessRuleTask"}
+        referenced: set[Any] = set()
+        for collection in ("flows", "messageFlows"):
+            for flow in workflow.get(collection, []):
+                if isinstance(flow, Mapping):
+                    referenced.update({flow.get("source"), flow.get("target")})
+        for participant in workflow.get("participants", []):
+            if not isinstance(participant, Mapping):
+                continue
+            referenced.update(participant.get("nodeRefs", []))
+            for lane in participant.get("lanes", []):
+                if isinstance(lane, Mapping):
+                    referenced.update(lane.get("nodeRefs", []))
+        for lane in workflow.get("lanes", []):
+            if isinstance(lane, Mapping):
+                referenced.update(lane.get("nodeRefs", []))
+
+        retained = []
+        for index, node in enumerate(workflow.get("nodes", [])):
+            if (
+                isinstance(node, Mapping)
+                and node.get("type") in task_types
+                and node.get("id") not in referenced
+            ):
+                node_id = str(node.get("id"))
+                report.append(
+                    {
+                        "code": "REMOVED_ISOLATED_NODE",
+                        "message": f"Le nœud {node_id} a été supprimé car il était totalement isolé.",
+                        "node_id": node_id,
+                        "severity": "warning",
+                    }
+                )
+                continue
+            retained.append(node)
+        workflow["nodes"] = retained
 
     def _normalize_process(
         self, raw: Any, used_ids: set[str], report: list[NormalizationEntry]
@@ -315,35 +437,35 @@ class WorkflowNormalizer:
         for index, item in self._mapping_items(raw, collection, report):
             path = f"{collection}[{index}]"
             flow_id = self._assign_id(item.get("id"), "flow", used_ids, report, f"{path}.id")
-            source, source_key = self._first_value(item, self._FLOW_REF_ALIASES["sourceRef"])
-            target, target_key = self._first_value(item, self._FLOW_REF_ALIASES["targetRef"])
+            source, source_key = self._first_value(item, self._FLOW_REF_ALIASES["source"])
+            target, target_key = self._first_value(item, self._FLOW_REF_ALIASES["target"])
             normalized_source = self._resolve_reference(source, node_ids, participant_ids)
             normalized_target = self._resolve_reference(target, node_ids, participant_ids)
             condition = item.get("condition", item.get("conditionExpression"))
             flow: dict[str, Any] = {
                 "id": flow_id,
-                "sourceRef": normalized_source,
-                "targetRef": normalized_target,
+                "source": normalized_source,
+                "target": normalized_target,
                 "condition": condition,
                 "isDefault": bool(item.get("isDefault", False)),
             }
             flow_type = item.get("type", item.get("flowType", default_type))
             if flow_type is not None:
                 flow["type"] = flow_type
+            if item.get("name"):
+                flow["name"] = item["name"]
             if isinstance(item.get("properties"), Mapping):
                 flow["properties"] = copy.deepcopy(dict(item["properties"]))
-            if source_key != "sourceRef":
-                self._report_alias(report, f"{path}.{source_key}", f"{path}.sourceRef")
-            if target_key != "targetRef":
-                self._report_alias(report, f"{path}.{target_key}", f"{path}.targetRef")
+            if source_key != "source":
+                self._report_alias(report, f"{path}.{source_key}", f"{path}.source")
+            if target_key != "target":
+                self._report_alias(report, f"{path}.{target_key}", f"{path}.target")
             if "conditionExpression" in item and "condition" not in item:
                 self._report_alias(report, f"{path}.conditionExpression", f"{path}.condition")
             if source != normalized_source:
-                self._report(report, "REFERENCE_UPDATED", "Référence source normalisée.", f"{path}.sourceRef")
+                self._report(report, "REFERENCE_UPDATED", "Référence source normalisée.", f"{path}.source")
             if target != normalized_target:
-                self._report(report, "REFERENCE_UPDATED", "Référence cible normalisée.", f"{path}.targetRef")
-            self._report_schema_extension(report, f"{path}.sourceRef")
-            self._report_schema_extension(report, f"{path}.targetRef")
+                self._report(report, "REFERENCE_UPDATED", "Référence cible normalisée.", f"{path}.target")
             result.append(flow)
             self._report_unknown_fields(item, self._flow_source_keys(), path, report)
         return result

@@ -20,8 +20,8 @@ def valid_workflow() -> dict:
             {"id": "end", "type": "endEvent", "name": "End", "actor": None, "properties": {}},
         ],
         "flows": [
-            {"id": "f1", "sourceRef": "start", "targetRef": "work", "condition": None, "isDefault": False},
-            {"id": "f2", "sourceRef": "work", "targetRef": "end", "condition": None, "isDefault": False},
+            {"id": "f1", "source": "start", "target": "work", "condition": None, "isDefault": False},
+            {"id": "f2", "source": "work", "target": "end", "condition": None, "isDefault": False},
         ],
         "ambiguities": [],
     }
