@@ -12,7 +12,7 @@ import json
 import re
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from .normalizer import WorkflowNormalizer
 from .semantic_validator import SemanticValidator
@@ -35,12 +35,17 @@ class WorkflowRepairer:
 
     MAX_ATTEMPTS = 3
 
-    def __init__(self, max_attempts: int | None = None) -> None:
+    def __init__(
+        self,
+        max_attempts: int | None = None,
+        prompt_builder: Callable[[dict[str, Any], list[dict[str, Any]]], str] | None = None,
+    ) -> None:
         """Create a repairer with an optional positive attempt limit."""
         limit = self.MAX_ATTEMPTS if max_attempts is None else max_attempts
         if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
             raise ValueError("max_attempts doit être un entier strictement positif")
         self.max_attempts = limit
+        self._prompt_builder = prompt_builder
         self._normalizer = WorkflowNormalizer()
         self._semantic_validator = SemanticValidator()
         self._schema = self._load_effective_schema()
@@ -73,7 +78,11 @@ class WorkflowRepairer:
 
         for attempt in range(1, self.max_attempts + 1):
             input_errors = copy.deepcopy(prompt_errors)
-            prompt = self.build_repair_prompt(current, input_errors)
+            prompt = (
+                self._prompt_builder(copy.deepcopy(current), copy.deepcopy(input_errors))
+                if self._prompt_builder is not None
+                else self.build_repair_prompt(current, input_errors)
+            )
             try:
                 generated = generator.generate_json(prompt)
             except Exception as exc:  # Generator implementations are external.
@@ -240,6 +249,12 @@ class WorkflowRepairer:
             "enum": ["sequenceFlow", "sequence", "messageFlow", "message"],
         }
         flow["properties"]["properties"] = {"type": "object"}
+
+        message_flow = effective["$defs"].get("messageFlow")
+        if message_flow is not None:
+            message_flow["required"] = ["id", "sourceRef", "targetRef"]
+            message_flow["properties"]["sourceRef"] = message_flow["properties"].pop("source")
+            message_flow["properties"]["targetRef"] = message_flow["properties"].pop("target")
 
         node_types = effective["$defs"]["node"]["properties"]["type"]["enum"]
         node_types.extend(["inclusiveGateway", "subProcess"])

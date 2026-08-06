@@ -45,6 +45,18 @@
       "items": {
         "$ref": "#/$defs/ambiguity"
       }
+    },
+    "lanes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/lane"
+      }
+    },
+    "messageFlows": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/messageFlow"
+      }
     }
   },
   "$defs": {
@@ -101,6 +113,48 @@
             "system",
             "externalOrganization"
           ]
+        },
+        "nodeRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/identifier"
+          }
+        },
+        "lanes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/lane"
+          }
+        },
+        "properties": {
+          "type": "object"
+        }
+      }
+    },
+    "lane": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "nodeRefs"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "nodeRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/identifier"
+          }
+        },
+        "properties": {
+          "type": "object"
         }
       }
     },
@@ -127,6 +181,11 @@
             "serviceTask",
             "exclusiveGateway",
             "parallelGateway",
+            "inclusiveGateway",
+            "eventBasedGateway",
+            "subProcess",
+            "intermediateCatchEvent",
+            "intermediateThrowEvent",
             "timerEvent"
           ]
         },
@@ -176,7 +235,9 @@
                   "startEvent",
                   "endEvent",
                   "exclusiveGateway",
-                  "parallelGateway"
+                  "parallelGateway",
+                  "inclusiveGateway",
+                  "eventBasedGateway"
                 ]
               }
             },
@@ -222,6 +283,55 @@
         },
         "isDefault": {
           "type": "boolean"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "sequenceFlow",
+            "sequence"
+          ]
+        },
+        "properties": {
+          "type": "object"
+        }
+      }
+    },
+    "messageFlow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "source",
+        "target"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "source": {
+          "$ref": "#/$defs/identifier"
+        },
+        "target": {
+          "$ref": "#/$defs/identifier"
+        },
+        "condition": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "isDefault": {
+          "type": "boolean"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "messageFlow",
+            "message"
+          ]
+        },
+        "properties": {
+          "type": "object"
         }
       }
     },
