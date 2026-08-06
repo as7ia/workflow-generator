@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from src.generation import WorkflowCompiler, extract_json_object
 from src.generation.prompts import build_generation_prompt, build_repair_prompt
+from src.workflow import WorkflowNormalizer
 
 
 SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schemas" / "workflow.schema.json"
@@ -265,6 +266,49 @@ class WorkflowCompilerTests(unittest.TestCase):
         self.assertIn("message", {item["id"] for item in result["normalized_workflow"]["messageFlows"]})
         self.assertTrue(all(flow["condition"] is None for flow in result["normalized_workflow"]["flows"] if flow["source"] == "split"))
         self.assertIn("REMOVED_ISOLATED_NODE", {warning["code"] for warning in result["warnings"]})
+
+    def test_compiler_owns_safe_repairs_without_normalizer_method(self) -> None:
+        compiler = WorkflowCompiler(FakeGenerator(), SCHEMA_PATH)
+        self.assertFalse(hasattr(WorkflowNormalizer(), "apply_safe_repairs"))
+        self.assertTrue(callable(compiler._apply_safe_repairs))
+        original = {
+            "nodes": [
+                {"id": "parallel", "type": "parallelGateway"},
+                {"id": "connected", "type": "serviceTask"},
+                {"id": "orphan", "type": "serviceTask"},
+                {"id": "message", "type": "messageFlow", "source": "connected", "target": "pool"},
+            ],
+            "flows": [{"id": "f", "source": "parallel", "target": "connected", "condition": "${x}"}],
+        }
+        snapshot = copy.deepcopy(original)
+        repaired, report = compiler._apply_safe_repairs(original)
+        self.assertEqual(snapshot, original)
+        self.assertNotIn("orphan", {node["id"] for node in repaired["nodes"]})
+        self.assertIn("message", {flow["id"] for flow in repaired["messageFlows"]})
+        self.assertIsNone(repaired["flows"][0]["condition"])
+        self.assertEqual(
+            {
+                "MISPLACED_MESSAGE_FLOW_MOVED",
+                "PARALLEL_GATEWAY_CONDITION_REMOVED",
+                "REMOVED_ISOLATED_NODE",
+            },
+            {entry["code"] for entry in report},
+        )
+
+    def test_safe_repairs_keep_message_linked_task_and_start_event(self) -> None:
+        compiler = WorkflowCompiler(FakeGenerator(), SCHEMA_PATH)
+        repaired, report = compiler._apply_safe_repairs(
+            {
+                "nodes": [
+                    {"id": "start", "type": "startEvent"},
+                    {"id": "task", "type": "serviceTask"},
+                ],
+                "flows": [],
+                "messageFlows": [{"id": "m", "source": "task", "target": "pool"}],
+            }
+        )
+        self.assertEqual({"start", "task"}, {node["id"] for node in repaired["nodes"]})
+        self.assertNotIn("REMOVED_ISOLATED_NODE", {entry["code"] for entry in report})
 
     def test_corrections_contain_no_refund_specific_rule(self) -> None:
         sources = [

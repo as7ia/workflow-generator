@@ -107,11 +107,19 @@ class WorkflowCompiler:
                     errors=blocking,
                     generator=self.generator,
                 )
+                repaired_workflow, repair_normalization_report = (
+                    self._normalizer.normalize_with_report(repaired_workflow)
+                )
                 normalized = self._to_canonical_schema_flows(repaired_workflow)
                 normalized, safe_repair_report = self._apply_safe_repairs(
                     normalized, blocking
                 )
                 result["normalized_workflow"] = normalized
+                result["warnings"].extend(
+                    entry
+                    for entry in repair_normalization_report
+                    if entry.get("severity") == "warning"
+                )
                 result["warnings"].extend(safe_repair_report)
                 result["repair_report"] = repair_report
                 result["schema_errors"] = self._validate_schema(normalized, schema)
@@ -240,15 +248,147 @@ class WorkflowCompiler:
         ]
 
     def _apply_safe_repairs(
-        self, workflow: dict[str, Any], errors: list[dict[str, Any]]
+        self,
+        workflow: dict[str, Any],
+        errors: list[dict[str, Any]] | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-        """Apply conservative deterministic corrections before validation.
-
-        ``errors`` is accepted for future code-targeted repairs; isolation is
-        established from references in the workflow itself and never guessed.
-        """
+        """Apply conservative deterministic fixes on a deep workflow copy."""
         del errors
-        return self._normalizer.apply_safe_repairs(workflow)
+        repaired = copy.deepcopy(workflow) if isinstance(workflow, Mapping) else {}
+        report: list[dict[str, Any]] = []
+        raw_nodes = repaired.get("nodes", [])
+        nodes = raw_nodes if isinstance(raw_nodes, list) else []
+        raw_messages = repaired.get("messageFlows", [])
+        message_flows = raw_messages if isinstance(raw_messages, list) else []
+
+        retained_nodes: list[Any] = []
+        for index, node in enumerate(nodes):
+            if not isinstance(node, Mapping):
+                retained_nodes.append(node)
+                continue
+            node_type = str(node.get("type", "")).replace("_", "").lower()
+            if node_type not in {"messageflow", "message"}:
+                retained_nodes.append(node)
+                continue
+            source = node.get("source", node.get("sourceRef"))
+            target = node.get("target", node.get("targetRef"))
+            node_id = node.get("id")
+            if source is not None and target is not None:
+                moved = {
+                    "id": node_id,
+                    "source": source,
+                    "target": target,
+                    "condition": None,
+                    "isDefault": False,
+                    "type": "messageFlow",
+                }
+                if node.get("name"):
+                    moved["name"] = node["name"]
+                if isinstance(node.get("properties"), Mapping):
+                    moved["properties"] = copy.deepcopy(dict(node["properties"]))
+                message_flows.append(moved)
+                report.append(
+                    {
+                        "code": "MISPLACED_MESSAGE_FLOW_MOVED",
+                        "message": f"Le faux nœud {node_id} a été déplacé vers messageFlows.",
+                        "node_id": str(node_id) if node_id is not None else None,
+                        "severity": "warning",
+                    }
+                )
+            else:
+                report.append(
+                    {
+                        "code": "INVALID_MESSAGE_FLOW_NODE_REMOVED",
+                        "message": f"Le faux nœud {node_id} a été supprimé car sa source ou sa cible est absente.",
+                        "node_id": str(node_id) if node_id is not None else None,
+                        "severity": "warning",
+                    }
+                )
+        repaired["nodes"] = retained_nodes
+        if message_flows or "messageFlows" in repaired:
+            repaired["messageFlows"] = message_flows
+
+        parallel_ids = {
+            node.get("id")
+            for node in retained_nodes
+            if isinstance(node, Mapping) and node.get("type") == "parallelGateway"
+        }
+        raw_flows = repaired.get("flows", [])
+        flows = raw_flows if isinstance(raw_flows, list) else []
+        for index, flow in enumerate(flows):
+            if not isinstance(flow, dict):
+                continue
+            source = flow.get("source", flow.get("sourceRef"))
+            condition_keys = {
+                "conditionExpression",
+                "condition_expression",
+                "expression",
+            }
+            had_condition = flow.get("condition") not in (None, "") or any(
+                key in flow and flow.get(key) not in (None, "") for key in condition_keys
+            )
+            if source not in parallel_ids or not had_condition:
+                continue
+            flow["condition"] = None
+            for key in condition_keys:
+                flow.pop(key, None)
+            report.append(
+                {
+                    "code": "PARALLEL_GATEWAY_CONDITION_REMOVED",
+                    "message": "Condition supprimée d'un flux sortant d'une passerelle parallèle.",
+                    "flow_id": str(flow.get("id")) if flow.get("id") is not None else None,
+                    "severity": "warning",
+                }
+            )
+
+        referenced: set[Any] = set()
+        for collection in (flows, message_flows):
+            for flow in collection:
+                if isinstance(flow, Mapping):
+                    referenced.update(
+                        {
+                            flow.get("source", flow.get("sourceRef")),
+                            flow.get("target", flow.get("targetRef")),
+                        }
+                    )
+        for participant in repaired.get("participants", []):
+            if not isinstance(participant, Mapping):
+                continue
+            referenced.update(participant.get("nodeRefs", []))
+            for lane in participant.get("lanes", []):
+                if isinstance(lane, Mapping):
+                    referenced.update(lane.get("nodeRefs", []))
+        for lane in repaired.get("lanes", []):
+            if isinstance(lane, Mapping):
+                referenced.update(lane.get("nodeRefs", []))
+
+        task_types = {
+            "userTask",
+            "serviceTask",
+            "manualTask",
+            "scriptTask",
+            "businessRuleTask",
+        }
+        final_nodes = []
+        for node in retained_nodes:
+            if (
+                isinstance(node, Mapping)
+                and node.get("type") in task_types
+                and node.get("id") not in referenced
+            ):
+                node_id = str(node.get("id"))
+                report.append(
+                    {
+                        "code": "REMOVED_ISOLATED_NODE",
+                        "message": f"Le nœud {node_id} a été supprimé car il était totalement isolé.",
+                        "node_id": node_id,
+                        "severity": "warning",
+                    }
+                )
+                continue
+            final_nodes.append(node)
+        repaired["nodes"] = final_nodes
+        return repaired, report
 
     @classmethod
     def _to_canonical_schema_flows(cls, workflow: dict[str, Any]) -> dict[str, Any]:

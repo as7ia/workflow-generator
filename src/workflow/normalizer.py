@@ -173,15 +173,6 @@ class WorkflowNormalizer:
         self._report_unknown_fields(source, self._source_top_level_keys(), "", report)
         return result, report
 
-    def apply_safe_repairs(
-        self, workflow: dict[str, Any]
-    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-        """Return a copy with only context-proven isolated tasks removed."""
-        result = copy.deepcopy(workflow) if isinstance(workflow, Mapping) else {}
-        report: list[dict[str, Any]] = []
-        self._remove_safe_isolated_tasks(result, report)
-        return result, report
-
     def _extract_misplaced_message_flows(
         self, raw_nodes: Any, report: list[NormalizationEntry]
     ) -> tuple[Any, list[dict[str, Any]]]:
@@ -245,46 +236,6 @@ class WorkflowNormalizer:
                 f"flows[{index}].condition",
             )
 
-    def _remove_safe_isolated_tasks(
-        self, workflow: dict[str, Any], report: list[dict[str, Any]]
-    ) -> None:
-        """Remove only unreferenced isolated tasks, never events or business-linked tasks."""
-        task_types = {"userTask", "serviceTask", "manualTask", "scriptTask", "businessRuleTask"}
-        referenced: set[Any] = set()
-        for collection in ("flows", "messageFlows"):
-            for flow in workflow.get(collection, []):
-                if isinstance(flow, Mapping):
-                    referenced.update({flow.get("source"), flow.get("target")})
-        for participant in workflow.get("participants", []):
-            if not isinstance(participant, Mapping):
-                continue
-            referenced.update(participant.get("nodeRefs", []))
-            for lane in participant.get("lanes", []):
-                if isinstance(lane, Mapping):
-                    referenced.update(lane.get("nodeRefs", []))
-        for lane in workflow.get("lanes", []):
-            if isinstance(lane, Mapping):
-                referenced.update(lane.get("nodeRefs", []))
-
-        retained = []
-        for index, node in enumerate(workflow.get("nodes", [])):
-            if (
-                isinstance(node, Mapping)
-                and node.get("type") in task_types
-                and node.get("id") not in referenced
-            ):
-                node_id = str(node.get("id"))
-                report.append(
-                    {
-                        "code": "REMOVED_ISOLATED_NODE",
-                        "message": f"Le nœud {node_id} a été supprimé car il était totalement isolé.",
-                        "node_id": node_id,
-                        "severity": "warning",
-                    }
-                )
-                continue
-            retained.append(node)
-        workflow["nodes"] = retained
 
     def _normalize_process(
         self, raw: Any, used_ids: set[str], report: list[NormalizationEntry]

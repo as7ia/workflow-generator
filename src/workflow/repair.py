@@ -60,7 +60,6 @@ class WorkflowRepairer:
         """
         original = copy.deepcopy(workflow) if isinstance(workflow, Mapping) else {}
         current = self._normalizer.normalize(original)
-        current, _ = self._normalizer.apply_safe_repairs(current)
         current_errors = self._validate(current)
         report: list[RepairAttempt] = []
 
@@ -111,7 +110,6 @@ class WorkflowRepairer:
                 continue
 
             candidate = self._normalizer.normalize(copy.deepcopy(dict(generated)))
-            candidate, _ = self._normalizer.apply_safe_repairs(candidate)
             output_errors = self._validate(candidate)
             candidate_score = self._score(output_errors)
             if candidate_score < best_score:

@@ -185,30 +185,8 @@ class WorkflowNormalizerTests(unittest.TestCase):
         )
         self.assertEqual("${x}", result["flows"][0]["condition"])
 
-    def test_safe_repair_removes_only_unreferenced_task(self) -> None:
-        repaired, report = self.normalizer.apply_safe_repairs(
-            {"nodes": [{"id": "orphan", "type": "serviceTask"}], "flows": []}
-        )
-        self.assertEqual([], repaired["nodes"])
-        self.assertEqual("REMOVED_ISOLATED_NODE", report[0]["code"])
-        self.assertEqual("orphan", report[0]["node_id"])
-
-    def test_safe_repair_keeps_task_referenced_by_message_flow(self) -> None:
-        repaired, _ = self.normalizer.apply_safe_repairs(
-            {
-                "nodes": [{"id": "task", "type": "serviceTask"}],
-                "flows": [],
-                "messageFlows": [{"id": "m", "source": "task", "target": "pool"}],
-            }
-        )
-        self.assertEqual("task", repaired["nodes"][0]["id"])
-
-    def test_safe_repair_keeps_isolated_start_event(self) -> None:
-        repaired, report = self.normalizer.apply_safe_repairs(
-            {"nodes": [{"id": "start", "type": "startEvent"}], "flows": []}
-        )
-        self.assertEqual("start", repaired["nodes"][0]["id"])
-        self.assertEqual([], report)
+    def test_public_api_does_not_require_apply_safe_repairs(self) -> None:
+        self.assertFalse(hasattr(self.normalizer, "apply_safe_repairs"))
 
 
 if __name__ == "__main__":
