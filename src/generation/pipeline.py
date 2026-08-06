@@ -98,12 +98,12 @@ class WorkflowCompiler:
 
         if blocking:
             try:
-                repair_input = self._to_normalizer_flow_refs(normalized)
+                current_workflow = copy.deepcopy(normalized)
                 repairer = WorkflowRepairer(
                     max_attempts=self.max_repair_attempts
                 )
                 repaired_workflow, repair_report = repairer.repair(
-                    workflow=repair_input,
+                    workflow=current_workflow,
                     errors=blocking,
                     generator=self.generator,
                 )
@@ -341,6 +341,33 @@ class WorkflowCompiler:
                 }
             )
 
+        node_ids = {
+            node.get("id")
+            for node in retained_nodes
+            if isinstance(node, Mapping) and node.get("id") is not None
+        }
+        valid_flows = []
+        for flow in flows:
+            if not isinstance(flow, Mapping):
+                valid_flows.append(flow)
+                continue
+            source = flow.get("source", flow.get("sourceRef"))
+            target = flow.get("target", flow.get("targetRef"))
+            if source in node_ids and target in node_ids:
+                valid_flows.append(flow)
+                continue
+            flow_id = str(flow.get("id")) if flow.get("id") is not None else None
+            report.append(
+                {
+                    "code": "REMOVED_INVALID_FLOW",
+                    "message": f"Le flux {flow_id} a été supprimé car sa source ou sa cible est absente ou inconnue.",
+                    "flow_id": flow_id,
+                    "severity": "warning",
+                }
+            )
+        repaired["flows"] = valid_flows
+        flows = valid_flows
+
         referenced: set[Any] = set()
         for collection in (flows, message_flows):
             for flow in collection:
@@ -392,7 +419,7 @@ class WorkflowCompiler:
 
     @classmethod
     def _to_canonical_schema_flows(cls, workflow: dict[str, Any]) -> dict[str, Any]:
-        """Convert normalized references to schema-canonical source/target."""
+        """Convert every accepted legacy alias to canonical source/target."""
         result = copy.deepcopy(workflow)
         for collection in ("flows", "messageFlows"):
             raw_flows = result.get(collection, [])
@@ -401,27 +428,20 @@ class WorkflowCompiler:
             for flow in raw_flows:
                 if not isinstance(flow, dict):
                     continue
-                if "sourceRef" in flow:
-                    flow["source"] = flow.pop("sourceRef")
-                if "targetRef" in flow:
-                    flow["target"] = flow.pop("targetRef")
-        return result
-
-    @classmethod
-    def _to_normalizer_flow_refs(cls, workflow: dict[str, Any]) -> dict[str, Any]:
-        """Convert canonical references to the repairer's normalized contract."""
-        result = copy.deepcopy(workflow)
-        for collection in ("flows", "messageFlows"):
-            raw_flows = result.get(collection, [])
-            if not isinstance(raw_flows, list):
-                continue
-            for flow in raw_flows:
-                if not isinstance(flow, dict):
-                    continue
-                if "source" in flow:
-                    flow["sourceRef"] = flow.pop("source")
-                if "target" in flow:
-                    flow["targetRef"] = flow.pop("target")
+                if "source" not in flow:
+                    for alias in ("sourceRef", "source_id", "from"):
+                        if alias in flow:
+                            flow["source"] = flow[alias]
+                            break
+                if "target" not in flow:
+                    for alias in ("targetRef", "target_id", "to"):
+                        if alias in flow:
+                            flow["target"] = flow[alias]
+                            break
+                for alias in ("sourceRef", "source_id", "from"):
+                    flow.pop(alias, None)
+                for alias in ("targetRef", "target_id", "to"):
+                    flow.pop(alias, None)
         return result
 
     @staticmethod

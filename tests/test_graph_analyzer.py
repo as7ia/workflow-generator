@@ -15,7 +15,7 @@ def node(node_id: str, node_type: str = "serviceTask", **extra) -> dict:
 
 
 def flow(flow_id: str, source: str, target: str, flow_type: str | None = None) -> dict:
-    value = {"id": flow_id, "sourceRef": source, "targetRef": target}
+    value = {"id": flow_id, "source": source, "target": target}
     if flow_type:
         value["type"] = flow_type
     return value
@@ -89,7 +89,7 @@ class WorkflowGraphAnalyzerTests(unittest.TestCase):
         )
         result = self.analyzer.analyze(graph)
         self.assertEqual([["a", "b"]], result["cycles"])
-        self.assertEqual("b", result["back_edges"][0]["sourceRef"])
+        self.assertEqual("b", result["back_edges"][0]["source"])
         self.assertEqual(result["levels"]["a"], result["levels"]["b"])
 
     def test_multiple_cycles(self) -> None:
@@ -165,7 +165,12 @@ class WorkflowGraphAnalyzerTests(unittest.TestCase):
         graph = workflow([node("a")], [flow("bad", "a", "missing")])
         result = self.analyzer.analyze(graph)
         self.assertEqual([], result["adjacency"]["a"])
-        self.assertIn("INVALID_FLOW_REFERENCE", {w["code"] for w in result["warnings"]})
+        self.assertIn("UNKNOWN_FLOW_TARGET", {w["code"] for w in result["warnings"]})
+
+    def test_canonical_source_target_build_adjacency(self) -> None:
+        result = self.analyzer.analyze(self.linear)
+        self.assertEqual(["task"], result["adjacency"]["start"])
+        self.assertEqual(["start"], result["reverse_adjacency"]["task"])
 
     def test_original_workflow_is_preserved(self) -> None:
         original = copy.deepcopy(self.linear)

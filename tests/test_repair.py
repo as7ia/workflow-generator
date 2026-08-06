@@ -64,6 +64,20 @@ class WorkflowRepairerTests(unittest.TestCase):
         self.assertEqual(1, len(report))
         self.assertEqual("success", report[0]["status"])
 
+    def test_each_generator_response_is_normalized_to_source_target(self) -> None:
+        legacy = valid_workflow()
+        for item in legacy["flows"]:
+            item["sourceRef"] = item.pop("source")
+            item["targetRef"] = item.pop("target")
+        repaired, _ = self.repairer.repair(
+            invalid_workflow(), self.end_error, FakeGenerator(legacy)
+        )
+        for item in repaired["flows"]:
+            self.assertIn("source", item)
+            self.assertIn("target", item)
+            self.assertNotIn("sourceRef", item)
+            self.assertNotIn("targetRef", item)
+
     def test_workflow_repaired_on_second_attempt(self) -> None:
         generator = FakeGenerator(invalid_workflow(), valid_workflow())
         _, report = self.repairer.repair(invalid_workflow(), self.end_error, generator)

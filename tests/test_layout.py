@@ -27,7 +27,7 @@ def node(node_id: str, node_type: str = "serviceTask", **extra) -> dict:
 
 
 def flow(flow_id: str, source: str, target: str, flow_type: str | None = None) -> dict:
-    result = {"id": flow_id, "sourceRef": source, "targetRef": target}
+    result = {"id": flow_id, "source": source, "target": target}
     if flow_type:
         result["type"] = flow_type
     return result

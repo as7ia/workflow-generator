@@ -184,6 +184,8 @@ class WorkflowRepairer:
             "Ne supprime aucune branche utile.\n"
             "N'invente pas de nouvelle étape sauf si elle est nécessaire pour corriger une erreur.\n"
             "Corrige les références invalides.\n"
+            "Utilise uniquement source et target; n'utilise jamais sourceRef ni targetRef.\n"
+            "Chaque source et target doit correspondre à un node.id existant et aucun flux ne doit être incomplet.\n"
             "Ajoute les événements de début ou de fin manquants si nécessaire.\n"
             "Corrige les passerelles et ajoute les conditions manquantes aux sorties des passerelles exclusives.\n"
             "Ne modifie pas les identifiants déjà valides sans raison.\n"

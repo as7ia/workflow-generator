@@ -37,6 +37,28 @@ class WorkflowNormalizerTests(unittest.TestCase):
         self.assertEqual("b", result["flows"][0]["target"])
         self.assertNotIn("sourceRef", result["flows"][0])
 
+    def test_source_ref_target_ref_become_canonical_keys(self) -> None:
+        result = self.normalizer.normalize(
+            self.workflow(
+                nodes=[{"id": "A", "type": "start"}, {"id": "B", "type": "end"}],
+                flows=[{"id": "F", "sourceRef": "A", "targetRef": "B"}],
+                messageFlows=[{"id": "M", "sourceRef": "A", "targetRef": "B"}],
+            )
+        )
+        legacy = {"sourceRef", "targetRef", "source_id", "target_id", "from", "to"}
+        for item in [*result["flows"], *result["messageFlows"]]:
+            self.assertEqual(("a", "b"), (item["source"], item["target"]))
+            self.assertFalse(legacy & set(item))
+
+    def test_canonical_source_target_remain_unchanged(self) -> None:
+        result = self.normalizer.normalize(
+            self.workflow(
+                nodes=[{"id": "a", "type": "start"}, {"id": "b", "type": "end"}],
+                flows=[{"id": "f", "source": "a", "target": "b"}],
+            )
+        )
+        self.assertEqual(("a", "b"), (result["flows"][0]["source"], result["flows"][0]["target"]))
+
     def test_all_requested_node_type_aliases(self) -> None:
         aliases = {
             "start": "startEvent", "start_event": "startEvent", "begin": "startEvent",

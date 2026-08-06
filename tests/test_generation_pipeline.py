@@ -133,6 +133,30 @@ class WorkflowCompilerTests(unittest.TestCase):
         self.assertTrue(all(set(error) == expected for error in result["schema_errors"]))
         self.assertTrue(all(error["code"] == "JSON_SCHEMA_ERROR" for error in result["schema_errors"]))
 
+    def test_pipeline_never_validates_raw_legacy_flow_keys(self) -> None:
+        raw = valid_workflow()
+        for item in raw["flows"]:
+            item["sourceRef"] = item.pop("source")
+            item["targetRef"] = item.pop("target")
+        compiler = WorkflowCompiler(FakeGenerator(raw), SCHEMA_PATH)
+        observed: list[dict] = []
+        real_validate = compiler._semantic_validator.validate
+
+        def recording_validate(candidate):
+            observed.append(copy.deepcopy(candidate))
+            return real_validate(candidate)
+
+        compiler._semantic_validator.validate = recording_validate
+        result = compiler.compile("Entrée legacy")
+        self.assertTrue(result["success"], result)
+        self.assertTrue(observed)
+        for candidate in observed:
+            for item in candidate["flows"]:
+                self.assertIn("source", item)
+                self.assertIn("target", item)
+                self.assertNotIn("sourceRef", item)
+                self.assertNotIn("targetRef", item)
+
     def test_semantic_errors_are_collected(self) -> None:
         invalid = invalid_without_end()
         result = self.compile_with(invalid, invalid, invalid, invalid)
@@ -309,6 +333,24 @@ class WorkflowCompilerTests(unittest.TestCase):
         )
         self.assertEqual({"start", "task"}, {node["id"] for node in repaired["nodes"]})
         self.assertNotIn("REMOVED_ISOLATED_NODE", {entry["code"] for entry in report})
+
+    def test_safe_repairs_remove_only_unresolvable_sequence_flows(self) -> None:
+        compiler = WorkflowCompiler(FakeGenerator(), SCHEMA_PATH)
+        repaired, report = compiler._apply_safe_repairs(
+            {
+                "nodes": [
+                    {"id": "a", "type": "startEvent"},
+                    {"id": "b", "type": "endEvent"},
+                ],
+                "flows": [
+                    {"id": "valid", "source": "a", "target": "b"},
+                    {"id": "missing", "source": "a"},
+                    {"id": "unknown", "source": "a", "target": "ghost"},
+                ],
+            }
+        )
+        self.assertEqual(["valid"], [flow["id"] for flow in repaired["flows"]])
+        self.assertEqual(2, sum(entry["code"] == "REMOVED_INVALID_FLOW" for entry in report))
 
     def test_corrections_contain_no_refund_specific_rule(self) -> None:
         sources = [

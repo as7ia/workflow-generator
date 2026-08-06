@@ -92,8 +92,8 @@ class SemanticValidator:
             if not self._usable_id(flow_id):
                 issues.append(self._issue("MISSING_FLOW_ID", f"Le flux à l'index {index} n'a pas d'identifiant valide."))
                 continue
-            flow["_source"] = flow.get("sourceRef", flow.get("source"))
-            flow["_target"] = flow.get("targetRef", flow.get("target"))
+            flow["_source"] = flow.get("source", flow.get("sourceRef"))
+            flow["_target"] = flow.get("target", flow.get("targetRef"))
             # The current schema predates explicit flow kinds, so an absent
             # discriminator remains a sequence flow for backward compatibility.
             flow["_kind"] = flow.get("type", flow.get("flowType", "sequenceFlow"))
@@ -214,12 +214,18 @@ class SemanticValidator:
         for flow in flows:
             flow_id = str(flow["id"])
             source, target = flow.get("_source"), flow.get("_target")
-            source_valid = self._usable_id(source) and source in node_ids
-            target_valid = self._usable_id(target) and target in node_ids
-            if not source_valid:
-                issues.append(self._issue("INVALID_SOURCE_REF", f"Le flux '{flow_id}' référence une source inexistante ou absente.", flow_id=flow_id))
-            if not target_valid:
-                issues.append(self._issue("INVALID_TARGET_REF", f"Le flux '{flow_id}' référence une cible inexistante ou absente.", flow_id=flow_id))
+            source_present = self._usable_id(source)
+            target_present = self._usable_id(target)
+            source_valid = source_present and source in node_ids
+            target_valid = target_present and target in node_ids
+            if not source_present:
+                issues.append(self._issue("MISSING_FLOW_SOURCE", f"La source du flux '{flow_id}' est absente.", flow_id=flow_id))
+            elif source not in node_ids:
+                issues.append(self._issue("UNKNOWN_FLOW_SOURCE", f"La source '{source}' du flux '{flow_id}' ne correspond à aucun nœud.", flow_id=flow_id))
+            if not target_present:
+                issues.append(self._issue("MISSING_FLOW_TARGET", f"La cible du flux '{flow_id}' est absente.", flow_id=flow_id))
+            elif target not in node_ids:
+                issues.append(self._issue("UNKNOWN_FLOW_TARGET", f"La cible '{target}' du flux '{flow_id}' ne correspond à aucun nœud.", flow_id=flow_id))
             if source_valid and target_valid:
                 valid.append(flow)
         return valid

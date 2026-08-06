@@ -15,8 +15,8 @@ def node(node_id: str, node_type: str, direction: str | None = None) -> dict:
 
 
 def flow(flow_id: str, source: str, target: str, condition=None, default=False, flow_type=None) -> dict:
-    """Build a flow using official BPMN reference keys."""
-    result = {"id": flow_id, "sourceRef": source, "targetRef": target, "condition": condition, "isDefault": default}
+    """Build a flow using canonical internal reference keys."""
+    result = {"id": flow_id, "source": source, "target": target, "condition": condition, "isDefault": default}
     if flow_type is not None:
         result["type"] = flow_type
     return result
@@ -46,9 +46,30 @@ class SemanticValidatorTests(unittest.TestCase):
 
     def test_flow_to_unknown_node(self) -> None:
         workflow = copy.deepcopy(self.linear)
-        workflow["flows"][1]["targetRef"] = "unknown"
+        workflow["flows"][1]["target"] = "unknown"
         issues = self.validator.validate(workflow)
-        self.assertTrue(any(i["code"] == "INVALID_TARGET_REF" and i["flow_id"] == "f2" for i in issues))
+        self.assertTrue(any(i["code"] == "UNKNOWN_FLOW_TARGET" and i["flow_id"] == "f2" for i in issues))
+
+    def test_missing_and_unknown_endpoints_have_distinct_codes(self) -> None:
+        workflow = copy.deepcopy(self.linear)
+        workflow["flows"] = [
+            {"id": "missing_source", "target": "task"},
+            {"id": "missing_target", "source": "start"},
+            {"id": "unknown_source", "source": "ghost", "target": "task"},
+            {"id": "unknown_target", "source": "task", "target": "ghost"},
+        ]
+        codes = {issue["code"] for issue in self.validator.validate(workflow)}
+        self.assertTrue(
+            {"MISSING_FLOW_SOURCE", "MISSING_FLOW_TARGET", "UNKNOWN_FLOW_SOURCE", "UNKNOWN_FLOW_TARGET"}.issubset(codes)
+        )
+
+    def test_legacy_reference_keys_remain_read_compatible(self) -> None:
+        workflow = copy.deepcopy(self.linear)
+        workflow["flows"] = [
+            {"id": item["id"], "sourceRef": item["source"], "targetRef": item["target"]}
+            for item in workflow["flows"]
+        ]
+        self.assertEqual([], self.validator.validate(workflow))
 
     def test_unreachable_task(self) -> None:
         workflow = copy.deepcopy(self.linear)

@@ -154,16 +154,25 @@ class WorkflowGraphAnalyzer:
                 messages.append(flow)
                 continue
             flow_id = str(flow.get("id", f"flow_{index}"))
-            source = flow.get("sourceRef", flow.get("source"))
-            target = flow.get("targetRef", flow.get("target"))
-            if source not in known or target not in known:
+            source = flow.get("source", flow.get("sourceRef"))
+            target = flow.get("target", flow.get("targetRef"))
+            if source is None:
                 warnings.append(
                     self._warning(
-                        "INVALID_FLOW_REFERENCE",
-                        f"Le flux '{flow_id}' référence un nœud inexistant.",
+                        "MISSING_FLOW_SOURCE",
+                        f"Le flux '{flow_id}' ne possède pas de source.",
                         flow_id=flow_id,
                     )
                 )
+                continue
+            if target is None:
+                warnings.append(self._warning("MISSING_FLOW_TARGET", f"Le flux '{flow_id}' ne possède pas de cible.", flow_id=flow_id))
+                continue
+            if source not in known:
+                warnings.append(self._warning("UNKNOWN_FLOW_SOURCE", f"La source '{source}' du flux '{flow_id}' est inconnue.", flow_id=flow_id))
+                continue
+            if target not in known:
+                warnings.append(self._warning("UNKNOWN_FLOW_TARGET", f"La cible '{target}' du flux '{flow_id}' est inconnue.", flow_id=flow_id))
                 continue
             adjacency_sets[source].add(target)
             reverse_sets[target].add(source)
@@ -322,7 +331,7 @@ class WorkflowGraphAnalyzer:
             if state.get(node_id, 0) == 0:
                 visit(node_id)
         return [
-            {"flow_id": flow_id, "sourceRef": source, "targetRef": target}
+            {"flow_id": flow_id, "source": source, "target": target}
             for flow_id, source, target in edges
             if (source, target) in back_pairs
         ]
@@ -508,8 +517,8 @@ class WorkflowGraphAnalyzer:
             messages.extend(item for item in raw_messages if isinstance(item, Mapping))
         for index, flow in enumerate(messages):
             flow_id = str(flow.get("id", f"message_flow_{index}"))
-            source = flow.get("sourceRef", flow.get("source"))
-            target = flow.get("targetRef", flow.get("target"))
+            source = flow.get("source", flow.get("sourceRef"))
+            target = flow.get("target", flow.get("targetRef"))
             source_owner = source if source in participants else node_to_participant.get(source)
             target_owner = target if target in participants else node_to_participant.get(target)
             if source_owner is None or target_owner is None:

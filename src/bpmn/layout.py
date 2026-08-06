@@ -524,8 +524,8 @@ class BPMNLayoutEngine:
                 "side": "bottom",
                 "channel_index": index,
                 "margin": float(BACK_EDGE_MARGIN),
-                "sourceRef": edge.get("sourceRef"),
-                "targetRef": edge.get("targetRef"),
+                "source": edge.get("source", edge.get("sourceRef")),
+                "target": edge.get("target", edge.get("targetRef")),
             }
             for index, edge in enumerate(edges)
         }
@@ -543,13 +543,13 @@ class BPMNLayoutEngine:
         for index, flow in enumerate(raw):
             if not isinstance(flow, Mapping):
                 continue
-            source = flow.get("sourceRef", flow.get("source"))
-            target = flow.get("targetRef", flow.get("target"))
+            source = flow.get("source", flow.get("sourceRef"))
+            target = flow.get("target", flow.get("targetRef"))
             result.append(
                 {
                     "flow_id": str(flow.get("id", f"message_flow_{index}")),
-                    "sourceRef": source,
-                    "targetRef": target,
+                    "source": source,
+                    "target": target,
                     "source_participant": ownership.get(source, source if source in analysis.get("participants", {}) else None),
                     "target_participant": ownership.get(target, target if target in analysis.get("participants", {}) else None),
                 }
@@ -631,8 +631,8 @@ def normalize_flows(flows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         {
             **flow,
-            "source": flow.get("sourceRef") or flow.get("source"),
-            "target": flow.get("targetRef") or flow.get("target"),
+            "source": flow.get("source") or flow.get("sourceRef"),
+            "target": flow.get("target") or flow.get("targetRef"),
         }
         for flow in flows
         if isinstance(flow, Mapping)

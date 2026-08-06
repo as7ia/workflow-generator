@@ -90,7 +90,6 @@ class WorkflowNormalizer:
         "flow": {"id", "name", "source", "target", "condition", "isDefault", "type", "properties"},
         "ambiguity": {"id", "message", "relatedNode", "severity"},
     }
-    _SCHEMA_1_EXTENSION_KEYS = {"lanes", "messageFlows", "sourceRef", "targetRef"}
     _TIMER_PATTERN = re.compile(
         r"^\s*(\d+)\s*(minute|minutes|min|hour|hours|hr|hrs|day|days|week|weeks)\s*$",
         re.IGNORECASE,
