@@ -7,6 +7,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from src.generation import WorkflowCompiler, extract_json_object
 from src.generation.prompts import build_generation_prompt, build_repair_prompt
@@ -85,6 +86,32 @@ class WorkflowCompilerTests(unittest.TestCase):
         result = self.compile_with(invalid_without_end(), valid_workflow())
         self.assertTrue(result["success"])
         self.assertEqual("success", result["repair_report"][-1]["status"])
+
+    def test_pipeline_never_passes_prompt_builder_to_repairer(self) -> None:
+        constructor_arguments: list[dict] = []
+
+        class StrictRepairer:
+            def __init__(self, max_attempts=None) -> None:
+                constructor_arguments.append({"max_attempts": max_attempts})
+
+            def repair(self, workflow, errors, generator):
+                return valid_workflow(), [
+                    {
+                        "attempt": 1,
+                        "status": "success",
+                        "input_errors": copy.deepcopy(errors),
+                        "output_errors": [],
+                        "message": "Réparé par le faux strict.",
+                    }
+                ]
+
+        with patch("src.generation.pipeline.WorkflowRepairer", StrictRepairer):
+            result = WorkflowCompiler(
+                FakeGenerator(invalid_without_end()), SCHEMA_PATH
+            ).compile("Régression constructeur")
+
+        self.assertTrue(result["success"], result)
+        self.assertEqual([{"max_attempts": 3}], constructor_arguments)
 
     def test_failed_repair_stops_after_three_attempts(self) -> None:
         invalid = invalid_without_end()

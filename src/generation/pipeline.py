@@ -27,7 +27,7 @@ except ImportError:  # pragma: no cover - supports PYTHONPATH=src notebooks.
     )
     from workflow.repair import _StandardSchemaValidator
 
-from .prompts import build_generation_prompt, build_repair_prompt
+from .prompts import build_generation_prompt
 
 
 CompilationResult = dict[str, Any]
@@ -62,7 +62,12 @@ class WorkflowCompiler:
 
         try:
             prompt = build_generation_prompt(description, schema)
-            raw = self.generator.generate_json(prompt)
+            generate_json = getattr(self.generator, "generate_json", None)
+            if not callable(generate_json):
+                raise TypeError(
+                    "Le générateur doit exposer generate_json(prompt: str) -> dict."
+                )
+            raw = generate_json(prompt)
             if not isinstance(raw, Mapping):
                 raise TypeError("Le générateur doit retourner un dictionnaire JSON.")
             result["raw_workflow"] = copy.deepcopy(dict(raw))
@@ -91,17 +96,14 @@ class WorkflowCompiler:
             try:
                 repair_input = self._to_normalizer_flow_refs(normalized)
                 repairer = WorkflowRepairer(
-                    max_attempts=self.max_repair_attempts,
-                    prompt_builder=lambda candidate, candidate_errors: build_repair_prompt(
-                        self._to_canonical_schema_flows(candidate),
-                        candidate_errors,
-                        schema,
-                    ),
+                    max_attempts=self.max_repair_attempts
                 )
-                repaired, repair_report = repairer.repair(
-                    repair_input, blocking, self.generator
+                repaired_workflow, repair_report = repairer.repair(
+                    workflow=repair_input,
+                    errors=blocking,
+                    generator=self.generator,
                 )
-                normalized = self._to_canonical_schema_flows(repaired)
+                normalized = self._to_canonical_schema_flows(repaired_workflow)
                 result["normalized_workflow"] = normalized
                 result["repair_report"] = repair_report
                 result["schema_errors"] = self._validate_schema(normalized, schema)
