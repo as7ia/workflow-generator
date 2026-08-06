@@ -1,0 +1,56 @@
+<?xml version='1.0' encoding='utf-8'?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" id="Definitions_Process_1" targetNamespace="http://workflow-generator.local/bpmn">
+  <bpmn:process id="Process_1" name="Workflow" isExecutable="true">
+    <bpmn:startEvent id="start_1" name="Début" />
+    <bpmn:userTask id="task_validate" name="Valider commande" />
+    <bpmn:parallelGateway id="split" name="Séparer" />
+    <bpmn:serviceTask id="task_invoice" name="Préparer facture" />
+    <bpmn:userTask id="task_package" name="Préparer colis" />
+    <bpmn:parallelGateway id="join" name="Réunir" />
+    <bpmn:endEvent id="end_1" name="Fin" />
+    <bpmn:sequenceFlow id="flow_1" sourceRef="start_1" targetRef="task_validate" />
+    <bpmn:sequenceFlow id="flow_2" sourceRef="task_validate" targetRef="split" />
+    <bpmn:sequenceFlow id="flow_3" sourceRef="split" targetRef="task_invoice" />
+    <bpmn:sequenceFlow id="flow_4" sourceRef="split" targetRef="task_package" />
+    <bpmn:sequenceFlow id="flow_5" sourceRef="task_invoice" targetRef="join" />
+    <bpmn:sequenceFlow id="flow_6" sourceRef="task_package" targetRef="join" />
+    <bpmn:sequenceFlow id="flow_7" sourceRef="join" targetRef="end_1" />
+  </bpmn:process>
+  <bpmndi:BPMNDiagram id="BPMNDiagram_Process_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_Process_1" bpmnElement="Process_1">
+      <bpmndi:BPMNShape id="start_1_di" bpmnElement="start_1">
+        <dc:Bounds x="80" y="300" width="36" height="36" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="task_validate_di" bpmnElement="task_validate">
+        <dc:Bounds x="310" y="300" width="120" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="split_di" bpmnElement="split">
+        <dc:Bounds x="540" y="300" width="50" height="50" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="task_invoice_di" bpmnElement="task_invoice">
+        <dc:Bounds x="770" y="110" width="120" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="task_package_di" bpmnElement="task_package">
+        <dc:Bounds x="770" y="490" width="120" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="join_di" bpmnElement="join">
+        <dc:Bounds x="1000" y="110" width="50" height="50" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="end_1_di" bpmnElement="end_1">
+        <dc:Bounds x="1230" y="110" width="36" height="36" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="flow_1_di" bpmnElement="flow_1" />
+      <bpmndi:BPMNEdge id="flow_2_di" bpmnElement="flow_2" />
+      <bpmndi:BPMNEdge id="flow_3_di" bpmnElement="flow_3" />
+      <bpmndi:BPMNEdge id="flow_4_di" bpmnElement="flow_4" />
+      <bpmndi:BPMNEdge id="flow_5_di" bpmnElement="flow_5" />
+      <bpmndi:BPMNEdge id="flow_6_di" bpmnElement="flow_6" />
+      <bpmndi:BPMNEdge id="flow_7_di" bpmnElement="flow_7">
+        <di:waypoint x="1050" y="135.0" />
+        <di:waypoint x="1140.0" y="135.0" />
+        <di:waypoint x="1140.0" y="128.0" />
+        <di:waypoint x="1230" y="128.0" />
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

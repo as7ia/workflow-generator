@@ -1,0 +1,133 @@
+{
+  "schemaVersion": "1.0.0",
+  "process": {
+    "id": "order_preparation",
+    "name": "Préparation commande",
+    "description": "Processus parallèle.",
+    "executable": true
+  },
+  "participants": [
+    {
+      "id": "sales",
+      "name": "Commercial",
+      "type": "human"
+    },
+    {
+      "id": "billing",
+      "name": "Facturation",
+      "type": "system"
+    },
+    {
+      "id": "warehouse",
+      "name": "Logistique",
+      "type": "human"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "start_1",
+      "type": "startEvent",
+      "name": "Début",
+      "actor": null,
+      "properties": {}
+    },
+    {
+      "id": "task_validate",
+      "type": "userTask",
+      "name": "Valider commande",
+      "actor": "sales",
+      "properties": {}
+    },
+    {
+      "id": "split",
+      "type": "parallelGateway",
+      "name": "Séparer",
+      "actor": null,
+      "properties": {
+        "gatewayDirection": "diverging"
+      }
+    },
+    {
+      "id": "task_invoice",
+      "type": "serviceTask",
+      "name": "Préparer facture",
+      "actor": "billing",
+      "properties": {}
+    },
+    {
+      "id": "task_package",
+      "type": "userTask",
+      "name": "Préparer colis",
+      "actor": "warehouse",
+      "properties": {}
+    },
+    {
+      "id": "join",
+      "type": "parallelGateway",
+      "name": "Réunir",
+      "actor": null,
+      "properties": {
+        "gatewayDirection": "converging"
+      }
+    },
+    {
+      "id": "end_1",
+      "type": "endEvent",
+      "name": "Fin",
+      "actor": null,
+      "properties": {}
+    }
+  ],
+  "flows": [
+    {
+      "id": "flow_1",
+      "source": "start_1",
+      "target": "task_validate",
+      "condition": null,
+      "isDefault": false
+    },
+    {
+      "id": "flow_2",
+      "source": "task_validate",
+      "target": "split",
+      "condition": null,
+      "isDefault": false
+    },
+    {
+      "id": "flow_3",
+      "source": "split",
+      "target": "task_invoice",
+      "condition": null,
+      "isDefault": false
+    },
+    {
+      "id": "flow_4",
+      "source": "split",
+      "target": "task_package",
+      "condition": null,
+      "isDefault": false
+    },
+    {
+      "id": "flow_5",
+      "source": "task_invoice",
+      "target": "join",
+      "condition": null,
+      "isDefault": false
+    },
+    {
+      "id": "flow_6",
+      "source": "task_package",
+      "target": "join",
+      "condition": null,
+      "isDefault": false
+    },
+    {
+      "id": "flow_7",
+      "source": "join",
+      "target": "end_1",
+      "condition": null,
+      "isDefault": false
+    }
+  ],
+  "ambiguities": []
+}

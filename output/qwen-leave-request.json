@@ -1,0 +1,129 @@
+{
+  "schemaVersion": "1.0.0",
+  "process": {
+    "id": "conge_request_process",
+    "name": "Demande de congé",
+    "description": "Processus de demande de congé avec décision du manager",
+    "executable": true
+  },
+  "participants": [
+    {
+      "id": "employee",
+      "name": "Employé",
+      "type": "human"
+    },
+    {
+      "id": "manager",
+      "name": "Manager",
+      "type": "human"
+    },
+    {
+      "id": "hr",
+      "name": "Service RH",
+      "type": "system"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "start_1",
+      "type": "startEvent",
+      "name": "Début de la demande",
+      "actor": null,
+      "properties": {}
+    },
+    {
+      "id": "task_employee",
+      "type": "userTask",
+      "name": "Soumission de la demande de congé",
+      "actor": "employee",
+      "properties": {}
+    },
+    {
+      "id": "gateway_decision",
+      "type": "exclusiveGateway",
+      "name": "Décision du manager",
+      "actor": null,
+      "properties": {}
+    },
+    {
+      "id": "task_hr_approved",
+      "type": "serviceTask",
+      "name": "Enregistrement du congé par RH",
+      "actor": "hr",
+      "properties": {}
+    },
+    {
+      "id": "task_employee_approved",
+      "type": "sendTask",
+      "name": "Notification de confirmation",
+      "actor": "hr",
+      "properties": {}
+    },
+    {
+      "id": "task_employee_rejected",
+      "type": "sendTask",
+      "name": "Notification de refus",
+      "actor": "system",
+      "properties": {}
+    },
+    {
+      "id": "end_1",
+      "type": "endEvent",
+      "name": "Fin du processus",
+      "actor": null,
+      "properties": {}
+    }
+  ],
+  "flows": [
+    {
+      "id": "flow_1",
+      "source": "start_1",
+      "target": "task_employee",
+      "condition": null,
+      "isDefault": false
+    },
+    {
+      "id": "flow_2",
+      "source": "task_employee",
+      "target": "gateway_decision",
+      "condition": null,
+      "isDefault": false
+    },
+    {
+      "id": "flow_3",
+      "source": "gateway_decision",
+      "target": "task_hr_approved",
+      "condition": "approuvée",
+      "isDefault": false
+    },
+    {
+      "id": "flow_4",
+      "source": "gateway_decision",
+      "target": "task_employee_rejected",
+      "condition": "refusée",
+      "isDefault": false
+    },
+    {
+      "id": "flow_5",
+      "source": "task_hr_approved",
+      "target": "task_employee_approved",
+      "condition": null,
+      "isDefault": false
+    },
+    {
+      "id": "flow_6",
+      "source": "task_employee_approved",
+      "target": "end_1",
+      "condition": null,
+      "isDefault": false
+    },
+    {
+      "id": "flow_7",
+      "source": "task_employee_rejected",
+      "target": "end_1",
+      "condition": null,
+      "isDefault": false
+    }
+  ],
+  "ambiguities": []
+}

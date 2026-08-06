@@ -1,0 +1,106 @@
+{
+  "schemaVersion": "1.0.0",
+  "process": {
+    "id": "invoice_reminder",
+    "name": "Relance facture",
+    "description": "Processus avec timer.",
+    "executable": true
+  },
+  "participants": [
+    {
+      "id": "accountant",
+      "name": "Comptable",
+      "type": "human"
+    },
+    {
+      "id": "billing",
+      "name": "Facturation",
+      "type": "system"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "start_1",
+      "type": "startEvent",
+      "name": "Début",
+      "actor": null,
+      "properties": {}
+    },
+    {
+      "id": "task_send",
+      "type": "serviceTask",
+      "name": "Envoyer facture",
+      "actor": "billing",
+      "properties": {}
+    },
+    {
+      "id": "timer_1",
+      "type": "timerEvent",
+      "name": "Attendre trois jours",
+      "actor": null,
+      "properties": {
+        "timerType": "duration",
+        "value": "P3D"
+      }
+    },
+    {
+      "id": "task_check",
+      "type": "userTask",
+      "name": "Vérifier paiement",
+      "actor": "accountant",
+      "properties": {}
+    },
+    {
+      "id": "task_remind",
+      "type": "serviceTask",
+      "name": "Envoyer relance",
+      "actor": "billing",
+      "properties": {}
+    },
+    {
+      "id": "end_1",
+      "type": "endEvent",
+      "name": "Fin",
+      "actor": null,
+      "properties": {}
+    }
+  ],
+  "flows": [
+    {
+      "id": "flow_1",
+      "source": "start_1",
+      "target": "task_send",
+      "condition": null,
+      "isDefault": false
+    },
+    {
+      "id": "flow_2",
+      "source": "task_send",
+      "target": "timer_1",
+      "condition": null,
+      "isDefault": false
+    },
+    {
+      "id": "flow_3",
+      "source": "timer_1",
+      "target": "task_check",
+      "condition": null,
+      "isDefault": false
+    },
+    {
+      "id": "flow_4",
+      "source": "task_check",
+      "target": "task_remind",
+      "condition": null,
+      "isDefault": false
+    },
+    {
+      "id": "flow_5",
+      "source": "task_remind",
+      "target": "end_1",
+      "condition": null,
+      "isDefault": false
+    }
+  ],
+  "ambiguities": []
+}

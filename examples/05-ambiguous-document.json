@@ -1,0 +1,63 @@
+{
+  "schemaVersion": "1.0.0",
+  "process": {
+    "id": "document_validation",
+    "name": "Validation document",
+    "description": "Processus incomplet.",
+    "executable": false
+  },
+  "participants": [
+    {
+      "id": "employee",
+      "name": "Employé",
+      "type": "human"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "start_1",
+      "type": "startEvent",
+      "name": "Début",
+      "actor": null,
+      "properties": {}
+    },
+    {
+      "id": "task_submit",
+      "type": "userTask",
+      "name": "Soumettre document",
+      "actor": "employee",
+      "properties": {}
+    },
+    {
+      "id": "end_1",
+      "type": "endEvent",
+      "name": "Fin provisoire",
+      "actor": null,
+      "properties": {}
+    }
+  ],
+  "flows": [
+    {
+      "id": "flow_1",
+      "source": "start_1",
+      "target": "task_submit",
+      "condition": null,
+      "isDefault": false
+    },
+    {
+      "id": "flow_2",
+      "source": "task_submit",
+      "target": "end_1",
+      "condition": null,
+      "isDefault": false
+    }
+  ],
+  "ambiguities": [
+    {
+      "id": "ambiguity_1",
+      "message": "Le valideur du document n’est pas précisé.",
+      "relatedNode": null,
+      "severity": "error"
+    }
+  ]
+}

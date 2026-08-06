@@ -1,0 +1,96 @@
+{
+  "schemaVersion": "1.0.0",
+  "process": {
+    "id": "complaint",
+    "name": "Traitement réclamation",
+    "description": "Processus linéaire.",
+    "executable": true
+  },
+  "participants": [
+    {
+      "id": "client",
+      "name": "Client",
+      "type": "human"
+    },
+    {
+      "id": "agent",
+      "name": "Agent",
+      "type": "human"
+    },
+    {
+      "id": "system",
+      "name": "Système",
+      "type": "system"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "start_1",
+      "type": "startEvent",
+      "name": "Début",
+      "actor": null,
+      "properties": {}
+    },
+    {
+      "id": "task_submit",
+      "type": "userTask",
+      "name": "Soumettre la réclamation",
+      "actor": "client",
+      "properties": {}
+    },
+    {
+      "id": "task_review",
+      "type": "userTask",
+      "name": "Examiner la réclamation",
+      "actor": "agent",
+      "properties": {}
+    },
+    {
+      "id": "task_notify",
+      "type": "serviceTask",
+      "name": "Envoyer une confirmation",
+      "actor": "system",
+      "properties": {
+        "implementation": "email"
+      }
+    },
+    {
+      "id": "end_1",
+      "type": "endEvent",
+      "name": "Fin",
+      "actor": null,
+      "properties": {}
+    }
+  ],
+  "flows": [
+    {
+      "id": "flow_1",
+      "source": "start_1",
+      "target": "task_submit",
+      "condition": null,
+      "isDefault": false
+    },
+    {
+      "id": "flow_2",
+      "source": "task_submit",
+      "target": "task_review",
+      "condition": null,
+      "isDefault": false
+    },
+    {
+      "id": "flow_3",
+      "source": "task_review",
+      "target": "task_notify",
+      "condition": null,
+      "isDefault": false
+    },
+    {
+      "id": "flow_4",
+      "source": "task_notify",
+      "target": "end_1",
+      "condition": null,
+      "isDefault": false
+    }
+  ],
+  "ambiguities": []
+}

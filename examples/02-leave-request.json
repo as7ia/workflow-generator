@@ -1,0 +1,136 @@
+{
+  "schemaVersion": "1.0.0",
+  "process": {
+    "id": "leave_request",
+    "name": "Demande de congé",
+    "description": "Processus avec décision.",
+    "executable": true
+  },
+  "participants": [
+    {
+      "id": "employee",
+      "name": "Employé",
+      "type": "human"
+    },
+    {
+      "id": "manager",
+      "name": "Manager",
+      "type": "human"
+    },
+    {
+      "id": "hr_system",
+      "name": "Système RH",
+      "type": "system"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "start_1",
+      "type": "startEvent",
+      "name": "Début",
+      "actor": null,
+      "properties": {}
+    },
+    {
+      "id": "task_submit",
+      "type": "userTask",
+      "name": "Soumettre la demande",
+      "actor": "employee",
+      "properties": {}
+    },
+    {
+      "id": "task_review",
+      "type": "userTask",
+      "name": "Examiner la demande",
+      "actor": "manager",
+      "properties": {}
+    },
+    {
+      "id": "gateway_1",
+      "type": "exclusiveGateway",
+      "name": "Acceptée ?",
+      "actor": null,
+      "properties": {}
+    },
+    {
+      "id": "task_yes",
+      "type": "serviceTask",
+      "name": "Notifier acceptation",
+      "actor": "hr_system",
+      "properties": {}
+    },
+    {
+      "id": "task_no",
+      "type": "serviceTask",
+      "name": "Notifier refus",
+      "actor": "hr_system",
+      "properties": {}
+    },
+    {
+      "id": "end_yes",
+      "type": "endEvent",
+      "name": "Acceptée",
+      "actor": null,
+      "properties": {}
+    },
+    {
+      "id": "end_no",
+      "type": "endEvent",
+      "name": "Refusée",
+      "actor": null,
+      "properties": {}
+    }
+  ],
+  "flows": [
+    {
+      "id": "flow_1",
+      "source": "start_1",
+      "target": "task_submit",
+      "condition": null,
+      "isDefault": false
+    },
+    {
+      "id": "flow_2",
+      "source": "task_submit",
+      "target": "task_review",
+      "condition": null,
+      "isDefault": false
+    },
+    {
+      "id": "flow_3",
+      "source": "task_review",
+      "target": "gateway_1",
+      "condition": null,
+      "isDefault": false
+    },
+    {
+      "id": "flow_4",
+      "source": "gateway_1",
+      "target": "task_yes",
+      "condition": "${approved == true}",
+      "isDefault": false
+    },
+    {
+      "id": "flow_5",
+      "source": "gateway_1",
+      "target": "task_no",
+      "condition": null,
+      "isDefault": true
+    },
+    {
+      "id": "flow_6",
+      "source": "task_yes",
+      "target": "end_yes",
+      "condition": null,
+      "isDefault": false
+    },
+    {
+      "id": "flow_7",
+      "source": "task_no",
+      "target": "end_no",
+      "condition": null,
+      "isDefault": false
+    }
+  ],
+  "ambiguities": []
+}

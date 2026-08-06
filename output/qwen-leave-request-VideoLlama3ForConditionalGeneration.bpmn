@@ -1,0 +1,60 @@
+<?xml version='1.0' encoding='utf-8'?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" id="Definitions_Process_1" targetNamespace="http://workflow-generator.local/bpmn">
+  <bpmn:process id="Process_1" name="Workflow" isExecutable="true">
+    <bpmn:startEvent id="start_1" name="Début de la demande" />
+    <bpmn:userTask id="task_employee" name="Soumission de la demande de congé" />
+    <bpmn:exclusiveGateway id="gateway_decision" name="Décision du manager" />
+    <bpmn:serviceTask id="task_hr_approved" name="Enregistrement du congé par RH" />
+    <bpmn:sendTask id="task_employee_approved" name="Notification de confirmation" />
+    <bpmn:sendTask id="task_employee_rejected" name="Notification de refus" />
+    <bpmn:endEvent id="end_1" name="Fin du processus" />
+    <bpmn:sequenceFlow id="flow_1" sourceRef="start_1" targetRef="task_employee" />
+    <bpmn:sequenceFlow id="flow_2" sourceRef="task_employee" targetRef="gateway_decision" />
+    <bpmn:sequenceFlow id="flow_3" sourceRef="gateway_decision" targetRef="task_hr_approved" name="approuvée">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">approuvée</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_4" sourceRef="gateway_decision" targetRef="task_employee_rejected" name="refusée">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">refusée</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_5" sourceRef="task_hr_approved" targetRef="task_employee_approved" />
+    <bpmn:sequenceFlow id="flow_6" sourceRef="task_employee_approved" targetRef="end_1" />
+    <bpmn:sequenceFlow id="flow_7" sourceRef="task_employee_rejected" targetRef="end_1" />
+  </bpmn:process>
+  <bpmndi:BPMNDiagram id="BPMNDiagram_Process_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_Process_1" bpmnElement="Process_1">
+      <bpmndi:BPMNShape id="start_1_di" bpmnElement="start_1">
+        <dc:Bounds x="80" y="300" width="36" height="36" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="task_employee_di" bpmnElement="task_employee">
+        <dc:Bounds x="310" y="300" width="120" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="gateway_decision_di" bpmnElement="gateway_decision">
+        <dc:Bounds x="540" y="300" width="50" height="50" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="task_hr_approved_di" bpmnElement="task_hr_approved">
+        <dc:Bounds x="770" y="110" width="120" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="task_employee_approved_di" bpmnElement="task_employee_approved">
+        <dc:Bounds x="1000" y="110" width="120" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="task_employee_rejected_di" bpmnElement="task_employee_rejected">
+        <dc:Bounds x="770" y="490" width="120" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="end_1_di" bpmnElement="end_1">
+        <dc:Bounds x="1230" y="490" width="36" height="36" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="flow_1_di" bpmnElement="flow_1" />
+      <bpmndi:BPMNEdge id="flow_2_di" bpmnElement="flow_2" />
+      <bpmndi:BPMNEdge id="flow_3_di" bpmnElement="flow_3" />
+      <bpmndi:BPMNEdge id="flow_4_di" bpmnElement="flow_4" />
+      <bpmndi:BPMNEdge id="flow_5_di" bpmnElement="flow_5" />
+      <bpmndi:BPMNEdge id="flow_6_di" bpmnElement="flow_6" />
+      <bpmndi:BPMNEdge id="flow_7_di" bpmnElement="flow_7">
+        <di:waypoint x="890" y="530.0" />
+        <di:waypoint x="1060.0" y="530.0" />
+        <di:waypoint x="1060.0" y="508.0" />
+        <di:waypoint x="1230" y="508.0" />
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

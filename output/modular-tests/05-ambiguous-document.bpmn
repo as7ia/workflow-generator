@@ -1,0 +1,35 @@
+<?xml version='1.0' encoding='utf-8'?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" id="Definitions_Process_1" targetNamespace="http://workflow-generator.local/bpmn">
+  <bpmn:process id="Process_1" name="Workflow" isExecutable="true">
+    <bpmn:startEvent id="start_1" name="Début" />
+    <bpmn:userTask id="task_submit" name="Soumettre document" />
+    <bpmn:endEvent id="end_1" name="Fin provisoire" />
+    <bpmn:sequenceFlow id="flow_1" sourceRef="start_1" targetRef="task_submit" />
+    <bpmn:sequenceFlow id="flow_2" sourceRef="task_submit" targetRef="end_1" />
+  </bpmn:process>
+  <bpmndi:BPMNDiagram id="BPMNDiagram_Process_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_Process_1" bpmnElement="Process_1">
+      <bpmndi:BPMNShape id="start_1_di" bpmnElement="start_1">
+        <dc:Bounds x="80" y="300" width="36" height="36" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="task_submit_di" bpmnElement="task_submit">
+        <dc:Bounds x="310" y="300" width="120" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="end_1_di" bpmnElement="end_1">
+        <dc:Bounds x="540" y="300" width="36" height="36" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="flow_1_di" bpmnElement="flow_1">
+        <di:waypoint x="116.0" y="318.0" />
+        <di:waypoint x="213.0" y="318.0" />
+        <di:waypoint x="213.0" y="340.0" />
+        <di:waypoint x="310.0" y="340.0" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flow_2_di" bpmnElement="flow_2">
+        <di:waypoint x="430.0" y="340.0" />
+        <di:waypoint x="485.0" y="340.0" />
+        <di:waypoint x="485.0" y="318.0" />
+        <di:waypoint x="540.0" y="318.0" />
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

@@ -1,0 +1,70 @@
+{
+  "schemaVersion": "1.0.0",
+  "process": {
+    "id": "process_1",
+    "name": "Gestion d'une réclamation",
+    "description": "Un client dépose une réclamation, un agent l'analyse, puis répond au client avant que le processus ne se termine.",
+    "executable": true
+  },
+  "participants": [
+    {
+      "id": "agent_1",
+      "name": "Agent de service",
+      "type": "human"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "start_1",
+      "type": "startEvent",
+      "name": "Dépose de réclamation",
+      "actor": null,
+      "properties": {}
+    },
+    {
+      "id": "task_1",
+      "type": "userTask",
+      "name": "Analyse de la réclamation",
+      "actor": "agent_1",
+      "properties": {}
+    },
+    {
+      "id": "task_2",
+      "type": "userTask",
+      "name": "Réponse au client",
+      "actor": "agent_1",
+      "properties": {}
+    },
+    {
+      "id": "end_1",
+      "type": "endEvent",
+      "name": "Processus terminé",
+      "actor": null,
+      "properties": {}
+    }
+  ],
+  "flows": [
+    {
+      "id": "flow_1",
+      "source": "start_1",
+      "target": "task_1",
+      "condition": null,
+      "isDefault": true
+    },
+    {
+      "id": "flow_2",
+      "source": "task_1",
+      "target": "task_2",
+      "condition": null,
+      "isDefault": false
+    },
+    {
+      "id": "flow_3",
+      "source": "task_2",
+      "target": "end_1",
+      "condition": null,
+      "isDefault": false
+    }
+  ],
+  "ambiguities": []
+}
