@@ -1,0 +1,202 @@
+{
+  "ambiguities": [],
+  "flows": [
+    {
+      "condition": null,
+      "id": "client_flow_1",
+      "isDefault": false,
+      "source": "client_start",
+      "target": "client_task"
+    },
+    {
+      "condition": null,
+      "id": "client_flow_2",
+      "isDefault": false,
+      "source": "client_task",
+      "target": "client_end"
+    },
+    {
+      "condition": null,
+      "id": "company_flow_1",
+      "isDefault": false,
+      "source": "company_start",
+      "target": "company_task"
+    },
+    {
+      "condition": null,
+      "id": "company_flow_2",
+      "isDefault": false,
+      "source": "company_task",
+      "target": "company_end"
+    },
+    {
+      "condition": null,
+      "id": "bank_flow_1",
+      "isDefault": false,
+      "source": "bank_start",
+      "target": "bank_task"
+    },
+    {
+      "condition": null,
+      "id": "bank_flow_2",
+      "isDefault": false,
+      "source": "bank_task",
+      "target": "bank_end"
+    },
+    {
+      "condition": "request sent",
+      "id": "client_to_company",
+      "isDefault": false,
+      "name": "Demande",
+      "source": "client_task",
+      "target": "company_task",
+      "type": "sequenceFlow"
+    }
+  ],
+  "messageFlows": [
+    {
+      "id": "company_to_bank",
+      "name": "Instruction",
+      "source": "company_task",
+      "target": "bank_task",
+      "type": "messageFlow"
+    }
+  ],
+  "nodes": [
+    {
+      "actor": null,
+      "id": "client_start",
+      "name": "Start Client",
+      "properties": {},
+      "type": "startEvent"
+    },
+    {
+      "actor": "client",
+      "id": "client_task",
+      "name": "Action Client",
+      "properties": {},
+      "type": "userTask"
+    },
+    {
+      "actor": null,
+      "id": "client_end",
+      "name": "End Client",
+      "properties": {},
+      "type": "endEvent"
+    },
+    {
+      "actor": null,
+      "id": "company_start",
+      "name": "Start Entreprise",
+      "properties": {},
+      "type": "startEvent"
+    },
+    {
+      "actor": "company",
+      "id": "company_task",
+      "name": "Action Entreprise",
+      "properties": {},
+      "type": "userTask"
+    },
+    {
+      "actor": null,
+      "id": "company_end",
+      "name": "End Entreprise",
+      "properties": {},
+      "type": "endEvent"
+    },
+    {
+      "actor": null,
+      "id": "bank_start",
+      "name": "Start Banque",
+      "properties": {},
+      "type": "startEvent"
+    },
+    {
+      "actor": "bank",
+      "id": "bank_task",
+      "name": "Action Banque",
+      "properties": {},
+      "type": "userTask"
+    },
+    {
+      "actor": null,
+      "id": "bank_end",
+      "name": "End Banque",
+      "properties": {},
+      "type": "endEvent"
+    }
+  ],
+  "participants": [
+    {
+      "id": "client",
+      "lanes": [
+        {
+          "id": "client_lane",
+          "name": "Client",
+          "nodeRefs": [
+            "client_start",
+            "client_task",
+            "client_end"
+          ]
+        }
+      ],
+      "name": "Client",
+      "nodeRefs": [
+        "client_start",
+        "client_task",
+        "client_end"
+      ],
+      "type": "human"
+    },
+    {
+      "id": "company",
+      "lanes": [
+        {
+          "id": "company_lane",
+          "name": "Entreprise",
+          "nodeRefs": [
+            "company_start",
+            "company_task",
+            "company_end"
+          ]
+        }
+      ],
+      "name": "Entreprise",
+      "nodeRefs": [
+        "company_start",
+        "company_task",
+        "company_end"
+      ],
+      "type": "human"
+    },
+    {
+      "id": "bank",
+      "lanes": [
+        {
+          "id": "bank_lane",
+          "name": "Banque",
+          "nodeRefs": [
+            "bank_start",
+            "bank_task",
+            "bank_end"
+          ]
+        }
+      ],
+      "name": "Banque",
+      "nodeRefs": [
+        "bank_start",
+        "bank_task",
+        "bank_end"
+      ],
+      "type": "externalOrganization"
+    }
+  ],
+  "process": {
+    "description": "",
+    "executable": false,
+    "id": "business_exchange",
+    "name": "Échange tripartite"
+  },
+  "schemaVersion": "1.0.0"
+}

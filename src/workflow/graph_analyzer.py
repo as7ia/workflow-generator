@@ -478,10 +478,8 @@ class WorkflowGraphAnalyzer:
                 node_id = node["id"]
                 properties = node.get("properties") if isinstance(node.get("properties"), Mapping) else {}
                 participant = node.get("participantRef", node.get("poolRef", properties.get("participantRef", properties.get("poolRef"))))
-                actor = node.get("actor")
-                owner = participant if participant in participants else actor if actor in participants else None
-                if owner is not None:
-                    self._assign_membership(node_to_participant, node_id, owner, "MULTIPLE_PARTICIPANTS", warnings)
+                if participant in participants:
+                    self._assign_membership(node_to_participant, node_id, participant, "MULTIPLE_PARTICIPANTS", warnings)
 
         self._read_lanes(workflow.get("lanes"), None, known_nodes, lanes, node_to_lane, warnings)
         for lane in lanes.values():
@@ -524,7 +522,7 @@ class WorkflowGraphAnalyzer:
             if source_owner is None or target_owner is None:
                 warnings.append(self._warning("MESSAGE_FLOW_PARTICIPANT_UNKNOWN", f"Le message flow '{flow_id}' ne peut pas être rattaché à deux participants.", flow_id=flow_id))
             elif source_owner == target_owner:
-                warnings.append(self._warning("MESSAGE_FLOW_WITHIN_PARTICIPANT", f"Le message flow '{flow_id}' reste dans le même participant.", flow_id=flow_id))
+                warnings.append(self._warning("MESSAGE_FLOW_WITHIN_SAME_PARTICIPANT", f"Le message flow '{flow_id}' reste dans le même participant.", flow_id=flow_id))
 
         return {
             "participants": {key: participants[key] for key in sorted(participants)},

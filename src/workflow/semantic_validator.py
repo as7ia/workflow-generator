@@ -59,7 +59,20 @@ class SemanticValidator:
         valid_flows = self._check_references(flows, node_ids, issues)
         sequence_flows, message_flows = self._partition_flows(valid_flows, issues)
         self._check_control_flow_graph(nodes, sequence_flows, issues)
-        self._check_collaboration_elements(workflow, nodes, message_flows, issues)
+        raw_message_flows = workflow.get("messageFlows", [])
+        if raw_message_flows is None:
+            raw_message_flows = []
+        if not isinstance(raw_message_flows, list):
+            issues.append(self._issue("INVALID_MESSAGE_FLOWS", "La clé 'messageFlows' doit être une liste."))
+            raw_message_flows = []
+        external_message_flows = self._read_flows(raw_message_flows, issues)
+        self._check_collaboration_elements(
+            workflow,
+            nodes,
+            sequence_flows,
+            [*message_flows, *external_message_flows],
+            issues,
+        )
         return issues
 
     def _read_nodes(
@@ -154,17 +167,68 @@ class SemanticValidator:
         self,
         workflow: Mapping[str, Any],
         nodes: list[dict[str, Any]],
+        sequence_flows: list[dict[str, Any]],
         message_flows: list[dict[str, Any]],
         issues: list[ValidationIssue],
     ) -> None:
-        """Extension point for pool, lane and message-flow semantic rules.
+        """Validate pool boundaries without altering the control graph."""
+        node_ids = {str(node["id"]) for node in nodes if self._usable_id(node.get("id"))}
+        ownership = self._explicit_node_participants(workflow, node_ids)
+        for flow in sequence_flows:
+            source_owner = ownership.get(flow.get("_source"))
+            target_owner = ownership.get(flow.get("_target"))
+            if source_owner is not None and target_owner is not None and source_owner != target_owner:
+                flow_id = str(flow.get("id")) if flow.get("id") is not None else None
+                issues.append(
+                    self._issue(
+                        "SEQUENCE_FLOW_CROSSES_PARTICIPANTS",
+                        f"Le sequence flow '{flow_id}' traverse deux participants.",
+                        flow_id=flow_id,
+                    )
+                )
+        for flow in message_flows:
+            source_owner = ownership.get(flow.get("_source"))
+            target_owner = ownership.get(flow.get("_target"))
+            if source_owner is not None and source_owner == target_owner:
+                flow_id = str(flow.get("id")) if flow.get("id") is not None else None
+                issues.append(
+                    self._issue(
+                        "MESSAGE_FLOW_WITHIN_SAME_PARTICIPANT",
+                        f"Le message flow '{flow_id}' relie deux nœuds du même participant.",
+                        flow_id=flow_id,
+                        severity="warning",
+                    )
+                )
 
-        Endpoint existence is already checked uniformly.  Pool membership and
-        cross-pool constraints are intentionally deferred until the JSON
-        contract defines their representation.  Layout and routing do not
-        belong to semantic validation.
-        """
-        del workflow, nodes, message_flows, issues
+    @staticmethod
+    def _explicit_node_participants(
+        workflow: Mapping[str, Any], node_ids: set[str]
+    ) -> dict[str, str]:
+        """Map nodes from participant nodeRefs and participant-owned lanes."""
+        ownership: dict[str, str] = {}
+        participants = workflow.get("participants", [])
+        if not isinstance(participants, list):
+            return ownership
+        for participant in participants:
+            if not isinstance(participant, Mapping) or not isinstance(participant.get("id"), str):
+                continue
+            participant_id = participant["id"]
+            references = participant.get("nodeRefs", [])
+            if isinstance(references, list):
+                for node_id in references:
+                    if node_id in node_ids:
+                        ownership[node_id] = participant_id
+            lanes = participant.get("lanes", [])
+            if isinstance(lanes, list):
+                for lane in lanes:
+                    if not isinstance(lane, Mapping):
+                        continue
+                    lane_references = lane.get("nodeRefs", [])
+                    if isinstance(lane_references, list):
+                        for node_id in lane_references:
+                            if node_id in node_ids:
+                                ownership[node_id] = participant_id
+        return ownership
 
     def _check_required_events(
         self, nodes: list[dict[str, Any]], issues: list[ValidationIssue]

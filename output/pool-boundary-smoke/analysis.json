@@ -1,0 +1,310 @@
+{
+  "adjacency": {
+    "bank_end": [],
+    "bank_start": [
+      "bank_task"
+    ],
+    "bank_task": [
+      "bank_end"
+    ],
+    "client_end": [],
+    "client_start": [
+      "client_task"
+    ],
+    "client_task": [
+      "client_end"
+    ],
+    "company_end": [],
+    "company_start": [
+      "company_task"
+    ],
+    "company_task": [
+      "company_end"
+    ]
+  },
+  "back_edges": [],
+  "branches": [],
+  "components": [
+    [
+      "bank_end",
+      "bank_start",
+      "bank_task"
+    ],
+    [
+      "client_end",
+      "client_start",
+      "client_task"
+    ],
+    [
+      "company_end",
+      "company_start",
+      "company_task"
+    ]
+  ],
+  "condensed_adjacency": {
+    "0": [],
+    "1": [
+      "2"
+    ],
+    "2": [
+      "0"
+    ],
+    "3": [],
+    "4": [
+      "5"
+    ],
+    "5": [
+      "3"
+    ],
+    "6": [],
+    "7": [
+      "8"
+    ],
+    "8": [
+      "6"
+    ]
+  },
+  "condensed_components": {
+    "0": [
+      "bank_end"
+    ],
+    "1": [
+      "bank_start"
+    ],
+    "2": [
+      "bank_task"
+    ],
+    "3": [
+      "client_end"
+    ],
+    "4": [
+      "client_start"
+    ],
+    "5": [
+      "client_task"
+    ],
+    "6": [
+      "company_end"
+    ],
+    "7": [
+      "company_start"
+    ],
+    "8": [
+      "company_task"
+    ]
+  },
+  "cycles": [],
+  "end_nodes": [
+    "bank_end",
+    "client_end",
+    "company_end"
+  ],
+  "in_degree": {
+    "bank_end": 1,
+    "bank_start": 0,
+    "bank_task": 1,
+    "client_end": 1,
+    "client_start": 0,
+    "client_task": 1,
+    "company_end": 1,
+    "company_start": 0,
+    "company_task": 1
+  },
+  "join_gateways": [],
+  "lanes": {
+    "bank_lane": {
+      "id": "bank_lane",
+      "name": "Banque",
+      "node_ids": [
+        "bank_end",
+        "bank_start",
+        "bank_task"
+      ],
+      "participant_id": "bank"
+    },
+    "client_lane": {
+      "id": "client_lane",
+      "name": "Client",
+      "node_ids": [
+        "client_end",
+        "client_start",
+        "client_task"
+      ],
+      "participant_id": "client"
+    },
+    "company_lane": {
+      "id": "company_lane",
+      "name": "Entreprise",
+      "node_ids": [
+        "company_end",
+        "company_start",
+        "company_task"
+      ],
+      "participant_id": "company"
+    }
+  },
+  "levels": {
+    "bank_end": 2,
+    "bank_start": 0,
+    "bank_task": 1,
+    "client_end": 2,
+    "client_start": 0,
+    "client_task": 1,
+    "company_end": 2,
+    "company_start": 0,
+    "company_task": 1
+  },
+  "node_ids": [
+    "bank_end",
+    "bank_start",
+    "bank_task",
+    "client_end",
+    "client_start",
+    "client_task",
+    "company_end",
+    "company_start",
+    "company_task"
+  ],
+  "node_to_lane": {
+    "bank_end": "bank_lane",
+    "bank_start": "bank_lane",
+    "bank_task": "bank_lane",
+    "client_end": "client_lane",
+    "client_start": "client_lane",
+    "client_task": "client_lane",
+    "company_end": "company_lane",
+    "company_start": "company_lane",
+    "company_task": "company_lane"
+  },
+  "node_to_participant": {
+    "bank_end": "bank",
+    "bank_start": "bank",
+    "bank_task": "bank",
+    "client_end": "client",
+    "client_start": "client",
+    "client_task": "client",
+    "company_end": "company",
+    "company_start": "company",
+    "company_task": "company"
+  },
+  "nodes_without_predecessors": [
+    "bank_start",
+    "client_start",
+    "company_start"
+  ],
+  "nodes_without_successors": [
+    "bank_end",
+    "client_end",
+    "company_end"
+  ],
+  "out_degree": {
+    "bank_end": 0,
+    "bank_start": 1,
+    "bank_task": 1,
+    "client_end": 0,
+    "client_start": 1,
+    "client_task": 1,
+    "company_end": 0,
+    "company_start": 1,
+    "company_task": 1
+  },
+  "participants": {
+    "bank": {
+      "id": "bank",
+      "name": "Banque",
+      "node_ids": [
+        "bank_end",
+        "bank_start",
+        "bank_task"
+      ]
+    },
+    "client": {
+      "id": "client",
+      "name": "Client",
+      "node_ids": [
+        "client_end",
+        "client_start",
+        "client_task"
+      ]
+    },
+    "company": {
+      "id": "company",
+      "name": "Entreprise",
+      "node_ids": [
+        "company_end",
+        "company_start",
+        "company_task"
+      ]
+    }
+  },
+  "reverse_adjacency": {
+    "bank_end": [
+      "bank_task"
+    ],
+    "bank_start": [],
+    "bank_task": [
+      "bank_start"
+    ],
+    "client_end": [
+      "client_task"
+    ],
+    "client_start": [],
+    "client_task": [
+      "client_start"
+    ],
+    "company_end": [
+      "company_task"
+    ],
+    "company_start": [],
+    "company_task": [
+      "company_start"
+    ]
+  },
+  "split_gateways": [],
+  "start_nodes": [
+    "bank_start",
+    "client_start",
+    "company_start"
+  ],
+  "strongly_connected_components": [
+    [
+      "bank_end"
+    ],
+    [
+      "bank_start"
+    ],
+    [
+      "bank_task"
+    ],
+    [
+      "client_end"
+    ],
+    [
+      "client_start"
+    ],
+    [
+      "client_task"
+    ],
+    [
+      "company_end"
+    ],
+    [
+      "company_start"
+    ],
+    [
+      "company_task"
+    ]
+  ],
+  "topological_order": [
+    "bank_start",
+    "bank_task",
+    "bank_end",
+    "client_start",
+    "client_task",
+    "client_end",
+    "company_start",
+    "company_task",
+    "company_end"
+  ],
+  "warnings": []
+}

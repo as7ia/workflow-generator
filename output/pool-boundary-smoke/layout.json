@@ -1,0 +1,160 @@
+{
+  "lanes": {
+    "bank_lane": {
+      "height": 150.0,
+      "participant_id": "bank",
+      "width": 640.0,
+      "x": 30.0,
+      "y": 40.0
+    },
+    "client_lane": {
+      "height": 150.0,
+      "participant_id": "client",
+      "width": 640.0,
+      "x": 30.0,
+      "y": 270.0
+    },
+    "company_lane": {
+      "height": 150.0,
+      "participant_id": "company",
+      "width": 640.0,
+      "x": 30.0,
+      "y": 500.0
+    }
+  },
+  "metadata": {
+    "back_edge_channels": {},
+    "height": 690.0,
+    "message_flow_connections": [
+      {
+        "flow_id": "client_to_company",
+        "source": "client_task",
+        "source_participant": "client",
+        "target": "company_task",
+        "target_participant": "company"
+      },
+      {
+        "flow_id": "company_to_bank",
+        "source": "company_task",
+        "source_participant": "company",
+        "target": "bank_task",
+        "target_participant": "bank"
+      }
+    ],
+    "orientation": "horizontal",
+    "warnings": [],
+    "width": 710.0
+  },
+  "nodes": {
+    "bank_end": {
+      "branch_index": 0,
+      "height": 36.0,
+      "lane_id": "bank_lane",
+      "level": 2,
+      "participant_id": "bank",
+      "width": 36.0,
+      "x": 550.0,
+      "y": 70.0
+    },
+    "bank_start": {
+      "branch_index": 0,
+      "height": 36.0,
+      "lane_id": "bank_lane",
+      "level": 0,
+      "participant_id": "bank",
+      "width": 36.0,
+      "x": 110.0,
+      "y": 70.0
+    },
+    "bank_task": {
+      "branch_index": 0,
+      "height": 80.0,
+      "lane_id": "bank_lane",
+      "level": 1,
+      "participant_id": "bank",
+      "width": 120.0,
+      "x": 330.0,
+      "y": 70.0
+    },
+    "client_end": {
+      "branch_index": 0,
+      "height": 36.0,
+      "lane_id": "client_lane",
+      "level": 2,
+      "participant_id": "client",
+      "width": 36.0,
+      "x": 550.0,
+      "y": 300.0
+    },
+    "client_start": {
+      "branch_index": 0,
+      "height": 36.0,
+      "lane_id": "client_lane",
+      "level": 0,
+      "participant_id": "client",
+      "width": 36.0,
+      "x": 110.0,
+      "y": 300.0
+    },
+    "client_task": {
+      "branch_index": 0,
+      "height": 80.0,
+      "lane_id": "client_lane",
+      "level": 1,
+      "participant_id": "client",
+      "width": 120.0,
+      "x": 330.0,
+      "y": 300.0
+    },
+    "company_end": {
+      "branch_index": 0,
+      "height": 36.0,
+      "lane_id": "company_lane",
+      "level": 2,
+      "participant_id": "company",
+      "width": 36.0,
+      "x": 550.0,
+      "y": 530.0
+    },
+    "company_start": {
+      "branch_index": 0,
+      "height": 36.0,
+      "lane_id": "company_lane",
+      "level": 0,
+      "participant_id": "company",
+      "width": 36.0,
+      "x": 110.0,
+      "y": 530.0
+    },
+    "company_task": {
+      "branch_index": 0,
+      "height": 80.0,
+      "lane_id": "company_lane",
+      "level": 1,
+      "participant_id": "company",
+      "width": 120.0,
+      "x": 330.0,
+      "y": 530.0
+    }
+  },
+  "participants": {
+    "bank": {
+      "height": 150.0,
+      "width": 670.0,
+      "x": 0.0,
+      "y": 40.0
+    },
+    "client": {
+      "height": 150.0,
+      "width": 670.0,
+      "x": 0.0,
+      "y": 270.0
+    },
+    "company": {
+      "height": 150.0,
+      "width": 670.0,
+      "x": 0.0,
+      "y": 500.0
+    }
+  }
+}

@@ -370,6 +370,77 @@ class WorkflowCompiler:
         repaired["flows"] = valid_flows
         flows = valid_flows
 
+        ownership = self._explicit_node_participants(repaired, node_ids)
+        used_message_ids = {
+            str(flow.get("id"))
+            for flow in message_flows
+            if isinstance(flow, Mapping) and flow.get("id") is not None
+        }
+        next_message_index = 1
+        internal_flows: list[Any] = []
+        for flow in flows:
+            if not isinstance(flow, Mapping):
+                internal_flows.append(flow)
+                continue
+            source = flow.get("source", flow.get("sourceRef"))
+            target = flow.get("target", flow.get("targetRef"))
+            source_owner = ownership.get(source)
+            target_owner = ownership.get(target)
+            if source_owner is None or target_owner is None or source_owner == target_owner:
+                internal_flows.append(flow)
+                continue
+
+            original_id = str(flow.get("id")) if flow.get("id") is not None else ""
+            message_id = original_id
+            if not message_id or message_id in used_message_ids:
+                while f"message_flow_{next_message_index}" in used_message_ids:
+                    next_message_index += 1
+                message_id = f"message_flow_{next_message_index}"
+                next_message_index += 1
+            used_message_ids.add(message_id)
+            converted: dict[str, Any] = {
+                "id": message_id,
+                "source": source,
+                "target": target,
+                "type": "messageFlow",
+            }
+            if flow.get("name"):
+                converted["name"] = flow["name"]
+            if isinstance(flow.get("properties"), Mapping):
+                converted["properties"] = copy.deepcopy(dict(flow["properties"]))
+            message_flows.append(converted)
+            report.append(
+                {
+                    "code": "SEQUENCE_FLOW_CONVERTED_TO_MESSAGE_FLOW",
+                    "message": f"Le flux {original_id or message_id} traversait deux participants et a été converti en messageFlow.",
+                    "flow_id": message_id,
+                    "severity": "warning",
+                }
+            )
+
+        repaired["flows"] = internal_flows
+        flows = internal_flows
+        for flow in message_flows:
+            if not isinstance(flow, Mapping):
+                continue
+            source = flow.get("source", flow.get("sourceRef"))
+            target = flow.get("target", flow.get("targetRef"))
+            source_owner = ownership.get(source)
+            target_owner = ownership.get(target)
+            if source_owner is None or source_owner != target_owner:
+                continue
+            flow_id = str(flow.get("id")) if flow.get("id") is not None else None
+            report.append(
+                {
+                    "code": "MESSAGE_FLOW_WITHIN_SAME_PARTICIPANT",
+                    "message": f"Le message flow {flow_id} relie deux nœuds du même participant.",
+                    "flow_id": flow_id,
+                    "severity": "warning",
+                }
+            )
+        if message_flows or "messageFlows" in repaired:
+            repaired["messageFlows"] = message_flows
+
         referenced: set[Any] = set()
         for collection in (flows, message_flows):
             for flow in collection:
@@ -418,6 +489,37 @@ class WorkflowCompiler:
             final_nodes.append(node)
         repaired["nodes"] = final_nodes
         return repaired, report
+
+    @staticmethod
+    def _explicit_node_participants(
+        workflow: Mapping[str, Any], node_ids: set[Any]
+    ) -> dict[Any, str]:
+        """Build explicit node-to-pool ownership from nodeRefs and lanes."""
+        ownership: dict[Any, str] = {}
+        participants = workflow.get("participants", [])
+        if not isinstance(participants, list):
+            return ownership
+        for participant in participants:
+            if not isinstance(participant, Mapping) or not isinstance(participant.get("id"), str):
+                continue
+            participant_id = participant["id"]
+            references = participant.get("nodeRefs", [])
+            if isinstance(references, list):
+                for node_id in references:
+                    if node_id in node_ids:
+                        ownership[node_id] = participant_id
+            lanes = participant.get("lanes", [])
+            if not isinstance(lanes, list):
+                continue
+            for lane in lanes:
+                if not isinstance(lane, Mapping):
+                    continue
+                lane_references = lane.get("nodeRefs", [])
+                if isinstance(lane_references, list):
+                    for node_id in lane_references:
+                        if node_id in node_ids:
+                            ownership[node_id] = participant_id
+        return ownership
 
     @classmethod
     def _to_canonical_schema_flows(cls, workflow: dict[str, Any]) -> dict[str, Any]:
