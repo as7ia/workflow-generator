@@ -1,0 +1,369 @@
+{
+  "analysis": {
+    "adjacency": {
+      "end_1": [],
+      "start_1": [
+        "task_1"
+      ],
+      "task_1": [
+        "end_1"
+      ]
+    },
+    "back_edges": [],
+    "branches": [],
+    "components": [
+      [
+        "end_1",
+        "start_1",
+        "task_1"
+      ]
+    ],
+    "condensed_adjacency": {
+      "0": [],
+      "1": [
+        "2"
+      ],
+      "2": [
+        "0"
+      ]
+    },
+    "condensed_components": {
+      "0": [
+        "end_1"
+      ],
+      "1": [
+        "start_1"
+      ],
+      "2": [
+        "task_1"
+      ]
+    },
+    "cycles": [],
+    "end_nodes": [
+      "end_1"
+    ],
+    "in_degree": {
+      "end_1": 1,
+      "start_1": 0,
+      "task_1": 1
+    },
+    "join_gateways": [],
+    "lanes": {},
+    "levels": {
+      "end_1": 2,
+      "start_1": 0,
+      "task_1": 1
+    },
+    "node_ids": [
+      "end_1",
+      "start_1",
+      "task_1"
+    ],
+    "node_to_lane": {},
+    "node_to_participant": {
+      "task_1": "actor_id"
+    },
+    "nodes_without_predecessors": [
+      "start_1"
+    ],
+    "nodes_without_successors": [
+      "end_1"
+    ],
+    "out_degree": {
+      "end_1": 0,
+      "start_1": 1,
+      "task_1": 1
+    },
+    "participants": {
+      "actor_id": {
+        "id": "actor_id",
+        "name": "Acteur",
+        "node_ids": [
+          "task_1"
+        ]
+      }
+    },
+    "reverse_adjacency": {
+      "end_1": [
+        "task_1"
+      ],
+      "start_1": [],
+      "task_1": [
+        "start_1"
+      ]
+    },
+    "split_gateways": [],
+    "start_nodes": [
+      "start_1"
+    ],
+    "strongly_connected_components": [
+      [
+        "end_1"
+      ],
+      [
+        "start_1"
+      ],
+      [
+        "task_1"
+      ]
+    ],
+    "topological_order": [
+      "start_1",
+      "task_1",
+      "end_1"
+    ],
+    "warnings": [
+      {
+        "code": "NODE_WITHOUT_PARTICIPANT",
+        "flow_id": null,
+        "message": "Le nœud 'end_1' n'appartient à aucun participant.",
+        "node_id": "end_1",
+        "severity": "warning"
+      },
+      {
+        "code": "NODE_WITHOUT_PARTICIPANT",
+        "flow_id": null,
+        "message": "Le nœud 'start_1' n'appartient à aucun participant.",
+        "node_id": "start_1",
+        "severity": "warning"
+      }
+    ]
+  },
+  "bpmn_xml": null,
+  "description": "Smoke test d?terministe",
+  "error": null,
+  "layout": {
+    "lanes": {
+      "actor_id__implicit_lane": {
+        "height": 150.0,
+        "participant_id": "actor_id",
+        "width": 640.0,
+        "x": 30.0,
+        "y": 40.0
+      }
+    },
+    "metadata": {
+      "back_edge_channels": {},
+      "height": 346.0,
+      "message_flow_connections": [],
+      "orientation": "horizontal",
+      "warnings": [
+        {
+          "code": "IMPLICIT_LANE_ASSIGNED",
+          "container_id": "actor_id__implicit_lane",
+          "message": "Le nœud 'task_1' est placé dans une lane implicite.",
+          "node_id": "task_1",
+          "severity": "warning"
+        },
+        {
+          "code": "NODE_OUTSIDE_PARTICIPANT",
+          "container_id": null,
+          "message": "Le nœud 'end_1' ne possède aucun participant.",
+          "node_id": "end_1",
+          "severity": "warning"
+        },
+        {
+          "code": "NODE_OUTSIDE_PARTICIPANT",
+          "container_id": null,
+          "message": "Le nœud 'start_1' ne possède aucun participant.",
+          "node_id": "start_1",
+          "severity": "warning"
+        }
+      ],
+      "width": 710.0
+    },
+    "nodes": {
+      "end_1": {
+        "branch_index": 0,
+        "height": 36.0,
+        "lane_id": null,
+        "level": 2,
+        "participant_id": null,
+        "width": 36.0,
+        "x": 480.0,
+        "y": 270.0
+      },
+      "start_1": {
+        "branch_index": 0,
+        "height": 36.0,
+        "lane_id": null,
+        "level": 0,
+        "participant_id": null,
+        "width": 36.0,
+        "x": 40.0,
+        "y": 270.0
+      },
+      "task_1": {
+        "branch_index": 0,
+        "height": 80.0,
+        "lane_id": "actor_id__implicit_lane",
+        "level": 1,
+        "participant_id": "actor_id",
+        "width": 120.0,
+        "x": 330.0,
+        "y": 70.0
+      }
+    },
+    "participants": {
+      "actor_id": {
+        "height": 150.0,
+        "width": 670.0,
+        "x": 0.0,
+        "y": 40.0
+      }
+    }
+  },
+  "normalized_workflow": {
+    "ambiguities": [],
+    "flows": [
+      {
+        "condition": null,
+        "id": "flow_1",
+        "isDefault": false,
+        "source": "start_1",
+        "target": "task_1"
+      },
+      {
+        "condition": null,
+        "id": "flow_2",
+        "isDefault": false,
+        "source": "task_1",
+        "target": "end_1"
+      }
+    ],
+    "nodes": [
+      {
+        "actor": null,
+        "id": "start_1",
+        "name": "Début",
+        "properties": {},
+        "type": "startEvent"
+      },
+      {
+        "actor": "actor_id",
+        "id": "task_1",
+        "name": "Réaliser tâche",
+        "properties": {},
+        "type": "userTask"
+      },
+      {
+        "actor": null,
+        "id": "end_1",
+        "name": "Fin",
+        "properties": {},
+        "type": "endEvent"
+      }
+    ],
+    "participants": [
+      {
+        "id": "actor_id",
+        "name": "Acteur",
+        "type": "human"
+      }
+    ],
+    "process": {
+      "description": "Description",
+      "executable": true,
+      "id": "process_id",
+      "name": "Nom du processus"
+    },
+    "schemaVersion": "1.0.0"
+  },
+  "raw_workflow": {
+    "ambiguities": [],
+    "flows": [
+      {
+        "condition": null,
+        "id": "flow_1",
+        "isDefault": false,
+        "source": "start_1",
+        "target": "task_1"
+      },
+      {
+        "condition": null,
+        "id": "flow_2",
+        "isDefault": false,
+        "source": "task_1",
+        "target": "end_1"
+      }
+    ],
+    "nodes": [
+      {
+        "actor": null,
+        "id": "start_1",
+        "name": "Début",
+        "properties": {},
+        "type": "startEvent"
+      },
+      {
+        "actor": "actor_id",
+        "id": "task_1",
+        "name": "Réaliser tâche",
+        "properties": {},
+        "type": "userTask"
+      },
+      {
+        "actor": null,
+        "id": "end_1",
+        "name": "Fin",
+        "properties": {},
+        "type": "endEvent"
+      }
+    ],
+    "participants": [
+      {
+        "id": "actor_id",
+        "name": "Acteur",
+        "type": "human"
+      }
+    ],
+    "process": {
+      "description": "Description",
+      "executable": true,
+      "id": "process_id",
+      "name": "Nom du processus"
+    },
+    "schemaVersion": "1.0.0"
+  },
+  "repair_report": [],
+  "schema_errors": [],
+  "semantic_errors": [],
+  "success": true,
+  "warnings": [
+    {
+      "code": "NODE_WITHOUT_PARTICIPANT",
+      "flow_id": null,
+      "message": "Le nœud 'end_1' n'appartient à aucun participant.",
+      "node_id": "end_1",
+      "severity": "warning"
+    },
+    {
+      "code": "NODE_WITHOUT_PARTICIPANT",
+      "flow_id": null,
+      "message": "Le nœud 'start_1' n'appartient à aucun participant.",
+      "node_id": "start_1",
+      "severity": "warning"
+    },
+    {
+      "code": "IMPLICIT_LANE_ASSIGNED",
+      "container_id": "actor_id__implicit_lane",
+      "message": "Le nœud 'task_1' est placé dans une lane implicite.",
+      "node_id": "task_1",
+      "severity": "warning"
+    },
+    {
+      "code": "NODE_OUTSIDE_PARTICIPANT",
+      "container_id": null,
+      "message": "Le nœud 'end_1' ne possède aucun participant.",
+      "node_id": "end_1",
+      "severity": "warning"
+    },
+    {
+      "code": "NODE_OUTSIDE_PARTICIPANT",
+      "container_id": null,
+      "message": "Le nœud 'start_1' ne possède aucun participant.",
+      "node_id": "start_1",
+      "severity": "warning"
+    }
+  ]
+}

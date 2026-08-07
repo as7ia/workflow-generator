@@ -1,0 +1,81 @@
+{
+  "lanes": {
+    "actor_id__implicit_lane": {
+      "height": 150.0,
+      "participant_id": "actor_id",
+      "width": 640.0,
+      "x": 30.0,
+      "y": 40.0
+    }
+  },
+  "metadata": {
+    "back_edge_channels": {},
+    "height": 346.0,
+    "message_flow_connections": [],
+    "orientation": "horizontal",
+    "warnings": [
+      {
+        "code": "IMPLICIT_LANE_ASSIGNED",
+        "container_id": "actor_id__implicit_lane",
+        "message": "Le nœud 'task_1' est placé dans une lane implicite.",
+        "node_id": "task_1",
+        "severity": "warning"
+      },
+      {
+        "code": "NODE_OUTSIDE_PARTICIPANT",
+        "container_id": null,
+        "message": "Le nœud 'end_1' ne possède aucun participant.",
+        "node_id": "end_1",
+        "severity": "warning"
+      },
+      {
+        "code": "NODE_OUTSIDE_PARTICIPANT",
+        "container_id": null,
+        "message": "Le nœud 'start_1' ne possède aucun participant.",
+        "node_id": "start_1",
+        "severity": "warning"
+      }
+    ],
+    "width": 710.0
+  },
+  "nodes": {
+    "end_1": {
+      "branch_index": 0,
+      "height": 36.0,
+      "lane_id": null,
+      "level": 2,
+      "participant_id": null,
+      "width": 36.0,
+      "x": 480.0,
+      "y": 270.0
+    },
+    "start_1": {
+      "branch_index": 0,
+      "height": 36.0,
+      "lane_id": null,
+      "level": 0,
+      "participant_id": null,
+      "width": 36.0,
+      "x": 40.0,
+      "y": 270.0
+    },
+    "task_1": {
+      "branch_index": 0,
+      "height": 80.0,
+      "lane_id": "actor_id__implicit_lane",
+      "level": 1,
+      "participant_id": "actor_id",
+      "width": 120.0,
+      "x": 330.0,
+      "y": 70.0
+    }
+  },
+  "participants": {
+    "actor_id": {
+      "height": 150.0,
+      "width": 670.0,
+      "x": 0.0,
+      "y": 40.0
+    }
+  }
+}

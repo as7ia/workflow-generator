@@ -23,13 +23,17 @@ NODE_TAGS = {
     "serviceTask": "serviceTask",
     "manualTask": "manualTask",
     "scriptTask": "scriptTask",
+    "businessRuleTask": "businessRuleTask",
     "sendTask": "sendTask",
     "receiveTask": "receiveTask",
     "exclusiveGateway": "exclusiveGateway",
     "parallelGateway": "parallelGateway",
     "inclusiveGateway": "inclusiveGateway",
+    "eventBasedGateway": "eventBasedGateway",
     "intermediateCatchEvent": "intermediateCatchEvent",
+    "intermediateThrowEvent": "intermediateThrowEvent",
     "timerEvent": "intermediateCatchEvent",
+    "subProcess": "subProcess",
 }
 
 
@@ -37,6 +41,7 @@ GATEWAY_TYPES = {
     "exclusiveGateway",
     "parallelGateway",
     "inclusiveGateway",
+    "eventBasedGateway",
 }
 
 
@@ -44,6 +49,7 @@ EVENT_TYPES = {
     "startEvent",
     "endEvent",
     "intermediateCatchEvent",
+    "intermediateThrowEvent",
     "timerEvent",
 }
 

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from ..bpmn import BPMNLayoutEngine
+    from ..bpmn import BPMNGenerator, BPMNLayoutEngine
     from ..workflow import (
         SemanticValidator,
         WorkflowGraphAnalyzer,
@@ -18,7 +18,7 @@ try:
     )
     from ..workflow.repair import _StandardSchemaValidator
 except ImportError:  # pragma: no cover - supports PYTHONPATH=src notebooks.
-    from bpmn import BPMNLayoutEngine
+    from bpmn import BPMNGenerator, BPMNLayoutEngine
     from workflow import (
         SemanticValidator,
         WorkflowGraphAnalyzer,
@@ -49,6 +49,7 @@ class WorkflowCompiler:
         self._semantic_validator = SemanticValidator()
         self._analyzer = WorkflowGraphAnalyzer()
         self._layout_engine = BPMNLayoutEngine()
+        self._bpmn_generator = BPMNGenerator()
 
     def compile(self, description: str) -> CompilationResult:
         """Compile one natural-language description without leaking exceptions."""
@@ -158,12 +159,13 @@ class WorkflowCompiler:
             result["layout"].get("metadata", {}).get("warnings", [])
         )
 
-        bpmn_builder = getattr(self.generator, "generate_bpmn_xml", None)
-        if callable(bpmn_builder):
-            try:
-                result["bpmn_xml"] = bpmn_builder(normalized, result["layout"])
-            except Exception as exc:
-                return self._fail(result, "bpmn", exc)
+        try:
+            bpmn_xml = self._bpmn_generator.generate(normalized, result["layout"])
+            if not isinstance(bpmn_xml, str) or not bpmn_xml.strip():
+                raise ValueError("Le générateur BPMN a retourné un document vide.")
+            result["bpmn_xml"] = bpmn_xml
+        except Exception as exc:
+            return self._fail(result, "bpmn", exc)
 
         result["success"] = True
         return result

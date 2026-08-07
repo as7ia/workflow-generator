@@ -178,6 +178,7 @@ class WorkflowCompilerTests(unittest.TestCase):
             expected = {
                 "raw_workflow.json", "normalized_workflow.json", "analysis.json",
                 "layout.json", "repair_report.json", "compilation_report.json",
+                "workflow.bpmn",
             }
             self.assertEqual(expected, {path.name for path in Path(directory).iterdir()})
             saved = json.loads((Path(directory) / "compilation_report.json").read_text(encoding="utf-8"))
@@ -215,10 +216,19 @@ class WorkflowCompilerTests(unittest.TestCase):
     def test_message_flow_between_pools_compiles(self) -> None:
         raw = valid_workflow(
             participants=[
-                {"id": "p1", "name": "P1", "type": "human", "nodeRefs": ["start", "work"]},
-                {"id": "p2", "name": "P2", "type": "system", "nodeRefs": ["end"]},
+                {"id": "p1", "name": "P1", "type": "human", "nodeRefs": ["start", "work", "end"]},
+                {"id": "p2", "name": "P2", "type": "system", "nodeRefs": ["start2", "work2", "end2"]},
             ],
-            messageFlows=[{"id": "message", "source": "work", "target": "end", "type": "messageFlow"}],
+            nodes=valid_workflow()["nodes"] + [
+                {"id": "start2", "type": "startEvent", "name": "Start 2", "actor": None, "properties": {}},
+                {"id": "work2", "type": "serviceTask", "name": "Work 2", "actor": "system", "properties": {}},
+                {"id": "end2", "type": "endEvent", "name": "End 2", "actor": None, "properties": {}},
+            ],
+            flows=valid_workflow()["flows"] + [
+                {"id": "f3", "source": "start2", "target": "work2", "condition": None, "isDefault": False},
+                {"id": "f4", "source": "work2", "target": "end2", "condition": None, "isDefault": False},
+            ],
+            messageFlows=[{"id": "message", "source": "work", "target": "work2", "type": "messageFlow"}],
         )
         result = self.compile_with(raw)
         self.assertTrue(result["success"], result)

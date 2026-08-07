@@ -1,0 +1,56 @@
+{
+  "ambiguities": [],
+  "flows": [
+    {
+      "condition": null,
+      "id": "flow_1",
+      "isDefault": false,
+      "source": "start_1",
+      "target": "task_1"
+    },
+    {
+      "condition": null,
+      "id": "flow_2",
+      "isDefault": false,
+      "source": "task_1",
+      "target": "end_1"
+    }
+  ],
+  "nodes": [
+    {
+      "actor": null,
+      "id": "start_1",
+      "name": "Début",
+      "properties": {},
+      "type": "startEvent"
+    },
+    {
+      "actor": "actor_id",
+      "id": "task_1",
+      "name": "Réaliser tâche",
+      "properties": {},
+      "type": "userTask"
+    },
+    {
+      "actor": null,
+      "id": "end_1",
+      "name": "Fin",
+      "properties": {},
+      "type": "endEvent"
+    }
+  ],
+  "participants": [
+    {
+      "id": "actor_id",
+      "name": "Acteur",
+      "type": "human"
+    }
+  ],
+  "process": {
+    "description": "Description",
+    "executable": true,
+    "id": "process_id",
+    "name": "Nom du processus"
+  },
+  "schemaVersion": "1.0.0"
+}

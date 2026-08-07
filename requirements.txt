@@ -1,1 +1,4 @@
 jsonschema>=4.22,<5
+transformers>=4.51
+accelerate
+sentencepiece
