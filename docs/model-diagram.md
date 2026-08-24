@@ -1,41 +1,137 @@
-# Diagramme du modèle
+# Modèle canonique de workflow v2
+
+Le JSON intermédiaire officiel utilise `schemaVersion: "2.0"` et représente
+explicitement plusieurs processus. L'ownership BPMN est stocké dans le JSON ;
+il ne doit pas être déduit de `actor`, du layout ou du nom des éléments.
 
 ```text
 Workflow
-├── schemaVersion
-├── process : Process
-├── participants : Participant [0..*]
-├── nodes : Node [2..*]
-├── flows : Flow [1..*]
-└── ambiguities : Ambiguity [0..*]
-
-Node.actor → Participant.id
-Flow.source → Node.id
-Flow.target → Node.id
-Ambiguity.relatedNode → Node.id
+├── Process [1..*]
+│   ├── Participant / Pool [0..*]  via participant.processRef
+│   ├── Lane [0..*]                via lane.processRef
+│   ├── Node [0..*]                via node.processRef
+│   └── SequenceFlow [0..*]        via flow.processRef
+└── MessageFlow [0..*]
+    └── relie deux nodes appartenant à deux processus distincts
 ```
 
-```mermaid
-classDiagram
-class Workflow {
- +string schemaVersion
- +Process process
- +Participant[] participants
- +Node[] nodes
- +Flow[] flows
- +Ambiguity[] ambiguities
+## Collections canoniques
+
+```text
+Workflow
+├── schemaVersion = "2.0"
+├── processes: Process[]
+├── participants: Participant[]
+├── lanes: Lane[]
+├── nodes: Node[]
+├── flows: SequenceFlow[]
+├── messageFlows: MessageFlow[]
+└── ambiguities: Ambiguity[]
+```
+
+Relations de référence :
+
+```text
+Participant.processRef ───────────────→ Process.id
+Lane.processRef ──────────────────────→ Process.id
+Lane.participantRef ──────────────────→ Participant.id (optionnel)
+Node.processRef ──────────────────────→ Process.id
+Node.participantRef ──────────────────→ Participant.id (optionnel)
+Node.laneRef ─────────────────────────→ Lane.id (optionnel)
+SequenceFlow.processRef ──────────────→ Process.id
+SequenceFlow.source / target ─────────→ Node.id
+MessageFlow.source / target ──────────→ Node.id
+```
+
+`actor` est une information métier libre. Il n'établit aucune appartenance
+BPMN.
+
+## Invariants sémantiques
+
+- Chaque `node.processRef` référence un processus existant.
+- Si un node possède `participantRef`, ce participant référence le même process.
+- Si un node possède `laneRef`, cette lane référence le même process.
+- Une lane et son participant optionnel appartiennent au même process.
+- Les deux extrémités d'un sequence flow appartiennent au même process.
+- `flow.processRef` correspond au process de ses deux extrémités.
+- Les extrémités d'un message flow appartiennent à deux process distincts.
+- Chaque process possède son propre graphe de contrôle, ses start events et ses
+  end events.
+
+Le JSON Schema vérifie la forme et la présence des références. La vérification
+des références croisées et des invariants ci-dessus appartient au futur
+`SemanticValidator` v2.
+
+## Types BPMN officiels
+
+```text
+startEvent
+endEvent
+userTask
+serviceTask
+manualTask
+scriptTask
+businessRuleTask
+sendTask
+receiveTask
+exclusiveGateway
+parallelGateway
+inclusiveGateway
+eventBasedGateway
+subProcess
+intermediateCatchEvent
+intermediateThrowEvent
+```
+
+Il n'existe pas de type canonique `timerEvent`. Un timer est un événement BPMN
+supporté, par exemple `intermediateCatchEvent`, portant :
+
+```json
+{
+  "properties": {
+    "timer": {
+      "kind": "duration",
+      "value": "PT5M"
+    }
+  }
 }
-class Process { +string id +string name +string description +boolean executable }
-class Participant { +string id +string name +ParticipantType type }
-class Node { +string id +NodeType type +string name +string|null actor +object properties }
-class Flow { +string id +string source +string target +string|null condition +boolean isDefault }
-class Ambiguity { +string id +string message +string|null relatedNode +Severity severity }
-Workflow "1" *-- "1" Process
-Workflow "1" *-- "0..*" Participant
-Workflow "1" *-- "2..*" Node
-Workflow "1" *-- "1..*" Flow
-Workflow "1" *-- "0..*" Ambiguity
-Node --> Participant : actor
-Flow --> Node : source/target
-Ambiguity --> Node : relatedNode
 ```
+
+`kind` pourra ensuite être étendu à `date` et `cycle` sans créer un nouveau
+type de node.
+
+## Frontière JSON / BPMN XML
+
+Dans toutes les représentations JSON internes :
+
+```json
+{ "source": "node_a", "target": "node_b" }
+```
+
+Uniquement lors de la génération BPMN XML :
+
+```xml
+<bpmn:sequenceFlow sourceRef="node_a" targetRef="node_b" />
+```
+
+`sourceRef` et `targetRef` sont acceptés par le normalizer comme aliases de
+migration, mais ne figurent jamais dans sa sortie canonique.
+
+## Migration v1 vers v2
+
+- `process` devient un élément de `processes`.
+- Une ancienne collection `pools` devient `participants`.
+- Chaque participant reçoit un `processRef` explicite.
+- Les lanes imbriquées sont aplaties dans la collection top-level `lanes`.
+- Les anciens `participant.nodeRefs` et `lane.nodeRefs` servent uniquement à
+  renseigner `node.participantRef` et `node.laneRef` pendant la migration.
+- Plusieurs anciens pools possédant des membres sont migrés vers des processus
+  distincts et déterministes.
+- Un workflow v1 à processus unique conserve ce process pour les éléments non
+  attribués.
+- `actor` est conservé sans être utilisé comme ownership.
+- `sourceRef`, `source_id` et `from` deviennent `source`; les aliases target
+  deviennent `target`.
+- `timerEvent` devient `intermediateCatchEvent` avec `properties.timer`.
+- Le normalizer ne supprime aucune tâche, ne modifie aucune branche et ne
+  convertit aucun sequence flow en message flow.

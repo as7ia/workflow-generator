@@ -12,6 +12,7 @@ try:
     from ..bpmn import BPMNGenerator, BPMNLayoutEngine
     from ..workflow import (
         SemanticValidator,
+        CanonicalWorkflowPreparer,
         WorkflowGraphAnalyzer,
         WorkflowNormalizer,
         WorkflowRepairer,
@@ -21,6 +22,7 @@ except ImportError:  # pragma: no cover - supports PYTHONPATH=src notebooks.
     from bpmn import BPMNGenerator, BPMNLayoutEngine
     from workflow import (
         SemanticValidator,
+        CanonicalWorkflowPreparer,
         WorkflowGraphAnalyzer,
         WorkflowNormalizer,
         WorkflowRepairer,
@@ -75,24 +77,20 @@ class WorkflowCompiler:
         except Exception as exc:
             return self._fail(result, "generation", exc)
 
+        preparer = CanonicalWorkflowPreparer(schema)
         try:
-            normalized, normalization_report = self._normalizer.normalize_with_report(
-                dict(raw)
-            )
-            normalized = self._to_canonical_schema_flows(normalized)
-            normalized, safe_repair_report = self._apply_safe_repairs(
-                normalized, []
-            )
+            prepared = preparer.prepare(dict(raw))
+            normalized = prepared["workflow"]
             result["normalized_workflow"] = normalized
             result["warnings"].extend(
-                entry for entry in normalization_report if entry.get("severity") == "warning"
+                entry for entry in prepared["normalization_report"] if entry.get("severity") == "warning"
             )
-            result["warnings"].extend(safe_repair_report)
+            result["warnings"].extend(prepared["safe_repair_report"])
         except Exception as exc:
             return self._fail(result, "normalization", exc)
 
-        schema_errors = self._validate_schema(normalized, schema)
-        semantic_errors = self._semantic_validator.validate(normalized)
+        schema_errors = prepared["schema_errors"]
+        semantic_errors = prepared["semantic_errors"]
         result["schema_errors"] = schema_errors
         result["semantic_errors"] = semantic_errors
         blocking = self._blocking_errors(schema_errors, semantic_errors)
@@ -101,30 +99,25 @@ class WorkflowCompiler:
             try:
                 current_workflow = copy.deepcopy(normalized)
                 repairer = WorkflowRepairer(
-                    max_attempts=self.max_repair_attempts
+                    max_attempts=self.max_repair_attempts, schema=schema
                 )
                 repaired_workflow, repair_report = repairer.repair(
                     workflow=current_workflow,
                     errors=blocking,
                     generator=self.generator,
                 )
-                repaired_workflow, repair_normalization_report = (
-                    self._normalizer.normalize_with_report(repaired_workflow)
-                )
-                normalized = self._to_canonical_schema_flows(repaired_workflow)
-                normalized, safe_repair_report = self._apply_safe_repairs(
-                    normalized, blocking
-                )
+                prepared = preparer.prepare(repaired_workflow)
+                normalized = prepared["workflow"]
                 result["normalized_workflow"] = normalized
                 result["warnings"].extend(
                     entry
-                    for entry in repair_normalization_report
+                    for entry in prepared["normalization_report"]
                     if entry.get("severity") == "warning"
                 )
-                result["warnings"].extend(safe_repair_report)
+                result["warnings"].extend(prepared["safe_repair_report"])
                 result["repair_report"] = repair_report
-                result["schema_errors"] = self._validate_schema(normalized, schema)
-                result["semantic_errors"] = self._semantic_validator.validate(normalized)
+                result["schema_errors"] = prepared["schema_errors"]
+                result["semantic_errors"] = prepared["semantic_errors"]
                 blocking = self._blocking_errors(
                     result["schema_errors"], result["semantic_errors"]
                 )
@@ -254,7 +247,9 @@ class WorkflowCompiler:
         workflow: dict[str, Any],
         errors: list[dict[str, Any]] | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-        """Apply conservative deterministic fixes on a deep workflow copy."""
+        """Apply canonical v2 safe repairs through the shared preparation policy."""
+        return CanonicalWorkflowPreparer.apply_safe_repairs(workflow)
+        """Legacy implementation retained below temporarily unreachable."""
         del errors
         repaired = copy.deepcopy(workflow) if isinstance(workflow, Mapping) else {}
         report: list[dict[str, Any]] = []

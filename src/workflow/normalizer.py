@@ -1,8 +1,4 @@
-"""Defensive normalization of generated workflow JSON.
-
-The normalizer repairs representation differences only.  It deliberately does
-not validate graph semantics, generate BPMN, or infer missing business facts.
-"""
+"""Representation-only normalization into the canonical workflow model v2."""
 
 from __future__ import annotations
 
@@ -17,78 +13,30 @@ NormalizationEntry = dict[str, str]
 
 
 class WorkflowNormalizer:
-    """Normalize loosely generated workflow dictionaries into a stable form."""
+    """Normalize v2 payloads and migrate supported v1 representations."""
 
     _NODE_TYPES = {
-        "start": "startEvent",
-        "start_event": "startEvent",
-        "startevent": "startEvent",
-        "begin": "startEvent",
-        "end": "endEvent",
-        "end_event": "endEvent",
-        "endevent": "endEvent",
-        "finish": "endEvent",
-        "task": "userTask",
-        "user_task": "userTask",
-        "usertask": "userTask",
-        "human_task": "userTask",
-        "humantask": "userTask",
-        "service_task": "serviceTask",
-        "servicetask": "serviceTask",
-        "automatic_task": "serviceTask",
-        "automatictask": "serviceTask",
-        "exclusive_gateway": "exclusiveGateway",
-        "exclusivegateway": "exclusiveGateway",
-        "decision": "exclusiveGateway",
-        "xor": "exclusiveGateway",
-        "parallel_gateway": "parallelGateway",
-        "parallelgateway": "parallelGateway",
-        "parallel": "parallelGateway",
-        "and": "parallelGateway",
-        "inclusive_gateway": "inclusiveGateway",
-        "inclusivegateway": "inclusiveGateway",
-        "inclusive": "inclusiveGateway",
-        "or": "inclusiveGateway",
-        "subprocess": "subProcess",
-        "sub_process": "subProcess",
-        "timer_event": "timerEvent",
-        "timerevent": "timerEvent",
+        "start": "startEvent", "start_event": "startEvent", "startevent": "startEvent", "begin": "startEvent",
+        "end": "endEvent", "end_event": "endEvent", "endevent": "endEvent", "finish": "endEvent",
+        "task": "userTask", "user_task": "userTask", "usertask": "userTask", "human_task": "userTask", "humantask": "userTask",
+        "service_task": "serviceTask", "servicetask": "serviceTask", "automatic_task": "serviceTask", "automatictask": "serviceTask",
+        "manual_task": "manualTask", "manualtask": "manualTask",
+        "script_task": "scriptTask", "scripttask": "scriptTask",
+        "business_rule_task": "businessRuleTask", "businessruletask": "businessRuleTask",
+        "send_task": "sendTask", "sendtask": "sendTask",
+        "receive_task": "receiveTask", "receivetask": "receiveTask",
+        "exclusive_gateway": "exclusiveGateway", "exclusivegateway": "exclusiveGateway", "decision": "exclusiveGateway", "xor": "exclusiveGateway",
+        "parallel_gateway": "parallelGateway", "parallelgateway": "parallelGateway", "parallel": "parallelGateway", "and": "parallelGateway",
+        "inclusive_gateway": "inclusiveGateway", "inclusivegateway": "inclusiveGateway", "inclusive": "inclusiveGateway", "or": "inclusiveGateway",
+        "event_based_gateway": "eventBasedGateway", "eventbasedgateway": "eventBasedGateway",
+        "subprocess": "subProcess", "sub_process": "subProcess",
+        "intermediate_catch_event": "intermediateCatchEvent", "intermediatecatchevent": "intermediateCatchEvent",
+        "intermediate_throw_event": "intermediateThrowEvent", "intermediatethrowevent": "intermediateThrowEvent",
+        "timer_event": "intermediateCatchEvent", "timerevent": "intermediateCatchEvent",
     }
-    _NULL_ACTOR_TYPES = {
-        "startEvent",
-        "endEvent",
-        "timerEvent",
-        "exclusiveGateway",
-        "parallelGateway",
-        "inclusiveGateway",
-    }
-    _TOP_LEVEL_KEYS = {
-        "schemaVersion",
-        "process",
-        "participants",
-        "nodes",
-        "flows",
-        "ambiguities",
-        # Forward-compatible collaboration extensions requested by the API.
-        "lanes",
-        "messageFlows",
-    }
-    _ALIASES = {
-        "participants": ("participants", "pools"),
-        "lanes": ("lanes", "lane", "swimlanes"),
-        "messageFlows": ("messageFlows", "message_flows", "messages", "communications"),
-    }
-    _FLOW_REF_ALIASES = {
+    _FLOW_ALIASES = {
         "source": ("source", "sourceRef", "source_id", "from"),
         "target": ("target", "targetRef", "target_id", "to"),
-    }
-    _ALLOWED_FIELDS = {
-        "process": {"id", "name", "description", "executable"},
-        "participant": {"id", "name", "type", "lanes", "nodeRefs", "properties"},
-        "lane": {"id", "name", "nodeRefs", "properties"},
-        "node": {"id", "type", "name", "actor", "properties", "lanes", "nodeRefs"},
-        "flow": {"id", "name", "source", "target", "condition", "isDefault", "type", "properties"},
-        "ambiguity": {"id", "message", "relatedNode", "severity"},
     }
     _TIMER_PATTERN = re.compile(
         r"^\s*(\d+)\s*(minute|minutes|min|hour|hours|hr|hrs|day|days|week|weeks)\s*$",
@@ -96,488 +44,299 @@ class WorkflowNormalizer:
     )
 
     def normalize(self, workflow: dict[str, Any]) -> dict[str, Any]:
-        """Return a normalized deep copy of *workflow* without its report."""
         normalized, _ = self.normalize_with_report(workflow)
         return normalized
 
     def normalize_with_report(
         self, workflow: dict[str, Any]
     ) -> tuple[dict[str, Any], list[NormalizationEntry]]:
-        """Return a normalized workflow and a detailed modification report."""
         report: list[NormalizationEntry] = []
         if not isinstance(workflow, Mapping):
             return {}, [self._entry("INVALID_WORKFLOW", "Le workflow doit être un objet.", "", "warning")]
 
         source = copy.deepcopy(dict(workflow))
-        result: dict[str, Any] = {}
+        raw_version = source.get("schemaVersion")
+        is_v2 = isinstance(source.get("processes"), list) or str(raw_version or "").startswith("2")
+        supported_v1 = raw_version in (None, "", "1.0", "1.0.0") or str(raw_version).startswith("1.")
+        supported_v2 = str(raw_version or "").startswith("2")
+        output_version = "2.0" if supported_v2 or supported_v1 else raw_version
+        if not is_v2 and not supported_v1:
+            self._report(report, "UNSUPPORTED_SCHEMA_VERSION", f"Version de schéma non supportée : {raw_version}.", "schemaVersion", "warning")
         used_ids: set[str] = set()
 
-        result["schemaVersion"] = source.get("schemaVersion", "1.0.0")
-        if "schemaVersion" not in source:
-            self._report(report, "FIELD_DEFAULTED", "Version de schéma ajoutée.", "schemaVersion")
-
-        result["process"] = self._normalize_process(source.get("process"), used_ids, report)
-
-        raw_participants, participant_alias = self._aliased_value(source, "participants", [])
-        if participant_alias and participant_alias != "participants":
-            self._report_alias(report, participant_alias, "participants")
-        participants, participant_ids = self._normalize_participants(
-            raw_participants, used_ids, report
+        processes, process_ids = self._normalize_processes(source, used_ids, report)
+        default_process = processes[0]["id"]
+        participants, participant_ids, participant_members, nested_lanes = self._normalize_participants(
+            source, processes, process_ids, default_process, is_v2, used_ids, report
         )
-        result["participants"] = participants
+        process_ids = {item["id"]: item["id"] for item in processes} | process_ids
 
-        raw_nodes, misplaced_messages = self._extract_misplaced_message_flows(
-            source.get("nodes"), report
-        )
-        nodes, node_ids = self._normalize_nodes(raw_nodes, used_ids, report)
-        self._normalize_node_actors(nodes, participant_ids, report)
-        self._finalize_participant_lanes(participants, used_ids, node_ids, report)
-        result["nodes"] = nodes
-
-        result["flows"] = self._normalize_flows(
-            source.get("flows"), "flows", used_ids, node_ids, participant_ids, report
+        raw_lanes = source.get("lanes", source.get("swimlanes", []))
+        lanes, lane_ids, lane_members = self._normalize_lanes(
+            [*(raw_lanes if isinstance(raw_lanes, list) else []), *nested_lanes],
+            process_ids,
+            participant_ids,
+            {item["id"]: item["processRef"] for item in participants},
+            default_process,
+            used_ids,
+            report,
         )
 
-        raw_lanes, lane_alias = self._aliased_value(source, "lanes", None)
-        if raw_lanes is not None:
-            if lane_alias != "lanes":
-                self._report_alias(report, str(lane_alias), "lanes")
-            result["lanes"] = self._normalize_lanes(raw_lanes, used_ids, node_ids, report, "lanes")
-            self._report_schema_extension(report, "lanes")
-
-        raw_messages, message_alias = self._aliased_value(source, "messageFlows", None)
-        if misplaced_messages:
-            existing_messages = raw_messages if isinstance(raw_messages, list) else []
-            raw_messages = [*existing_messages, *misplaced_messages]
-            message_alias = message_alias or "messageFlows"
-        if raw_messages is not None:
-            if message_alias != "messageFlows":
-                self._report_alias(report, str(message_alias), "messageFlows")
-            result["messageFlows"] = self._normalize_flows(
-                raw_messages,
-                "messageFlows",
-                used_ids,
-                node_ids,
-                participant_ids,
-                report,
-                default_type="messageFlow",
-            )
-            self._report_schema_extension(report, "messageFlows")
-
-        self._remove_parallel_gateway_conditions(result["nodes"], result["flows"], report)
-
-        result["ambiguities"] = self._normalize_ambiguities(
-            source.get("ambiguities"), used_ids, node_ids, report
+        legacy_participant_for_node = self._membership_map(participant_members)
+        legacy_lane_for_node = self._membership_map(lane_members)
+        nodes, node_ids = self._normalize_nodes(
+            source.get("nodes"),
+            process_ids,
+            participant_ids,
+            lane_ids,
+            {item["id"]: item for item in participants},
+            {item["id"]: item for item in lanes},
+            legacy_participant_for_node,
+            legacy_lane_for_node,
+            default_process,
+            is_v2,
+            used_ids,
+            report,
         )
-        self._report_unknown_fields(source, self._source_top_level_keys(), "", report)
-        return result, report
+        node_processes = {item["id"]: item.get("processRef") for item in nodes}
 
-    def _extract_misplaced_message_flows(
-        self, raw_nodes: Any, report: list[NormalizationEntry]
-    ) -> tuple[Any, list[dict[str, Any]]]:
-        """Move communication elements incorrectly emitted inside ``nodes``."""
-        if not isinstance(raw_nodes, list):
-            return raw_nodes, []
-        nodes: list[Any] = []
-        messages: list[dict[str, Any]] = []
-        for index, raw_node in enumerate(raw_nodes):
-            if not isinstance(raw_node, Mapping):
-                nodes.append(raw_node)
-                continue
-            raw_type = raw_node.get("type")
-            normalized_type = (
-                re.sub(r"[\s-]+", "_", raw_type.strip()).lower()
-                if isinstance(raw_type, str)
-                else ""
-            )
-            if normalized_type not in {"messageflow", "message_flow", "message"}:
-                nodes.append(raw_node)
-                continue
-            source, _ = self._first_value(raw_node, self._FLOW_REF_ALIASES["source"])
-            target, _ = self._first_value(raw_node, self._FLOW_REF_ALIASES["target"])
-            if source is not None and target is not None:
-                messages.append(dict(raw_node))
-                self._report(
-                    report,
-                    "MISPLACED_MESSAGE_FLOW_MOVED",
-                    "Élément de communication déplacé de nodes vers messageFlows.",
-                    f"nodes[{index}]",
-                    "warning",
-                )
+        flows = self._normalize_flows(
+            source.get("flows"), "flows", node_ids, process_ids, node_processes,
+            default_process, is_v2, used_ids, report, message=False
+        )
+        raw_messages = source.get("messageFlows", source.get("message_flows", source.get("messages", [])))
+        message_flows = self._normalize_flows(
+            raw_messages, "messageFlows", node_ids, process_ids, node_processes,
+            default_process, is_v2, used_ids, report, message=True
+        )
+        ambiguities = self._normalize_ambiguities(source.get("ambiguities"), node_ids, used_ids, report)
+
+        allowed = {
+            "schemaVersion", "process", "processes", "participants", "pools", "lanes", "swimlanes",
+            "nodes", "flows", "messageFlows", "message_flows", "messages", "ambiguities",
+        }
+        self._unknown(source, allowed, "", report)
+        return {
+            "schemaVersion": output_version,
+            "processes": processes,
+            "participants": participants,
+            "lanes": lanes,
+            "nodes": nodes,
+            "flows": flows,
+            "messageFlows": message_flows,
+            "ambiguities": ambiguities,
+        }, report
+
+    def _normalize_processes(self, source, used_ids, report):
+        raw = source.get("processes")
+        if not isinstance(raw, list):
+            raw = [source.get("process", {})]
+            self._report(report, "V1_PROCESS_MIGRATED", "Clé process convertie en processes.", "processes")
+        result, references = [], {}
+        for index, item in self._items(raw, "processes", report):
+            old_id = item.get("id")
+            identifier = self._assign_id(old_id, "process", used_ids, report, f"processes[{index}].id")
+            self._remember(references, old_id, identifier)
+            result.append({
+                "id": identifier,
+                "name": item.get("name") or self._name(identifier),
+                "description": str(item.get("description", "")),
+                "executable": bool(item.get("executable", False)),
+                "properties": self._properties(item),
+            })
+            self._unknown(item, {"id", "name", "description", "executable", "properties", "participantId"}, f"processes[{index}]", report)
+        if not result:
+            identifier = self._assign_id(None, "process", used_ids, report, "processes[0].id")
+            result.append({"id": identifier, "name": self._name(identifier), "description": "", "executable": False, "properties": {}})
+        return result, references
+
+    def _normalize_participants(self, source, processes, process_ids, default_process, is_v2, used_ids, report):
+        raw = source.get("participants")
+        if not raw and isinstance(source.get("pools"), list):
+            raw = source["pools"]
+            self._report(report, "KEY_NORMALIZED", "Clé pools convertie en participants.", "participants")
+        result, references, memberships, nested_lanes = [], {}, [], []
+        items = self._items(raw, "participants", report)
+        poolish = [bool(self._first(item, ("nodeRefs", "nodeIds", "nodes", "members"))[0] or item.get("lanes")) for _, item in items]
+        pool_count = sum(poolish)
+        pool_index = 0
+        for position, (index, item) in enumerate(items):
+            old_id = item.get("id")
+            identifier = self._assign_id(old_id, "participant", used_ids, report, f"participants[{index}].id")
+            self._remember(references, old_id, identifier)
+            explicit_process = item.get("processRef")
+            if explicit_process is not None:
+                process_ref = self._resolve(explicit_process, process_ids)
+            elif not is_v2 and pool_count > 1 and poolish[position]:
+                if pool_index == 0:
+                    process_ref = default_process
+                else:
+                    template = processes[0]
+                    process_ref = self._assign_id(f"{default_process}_{identifier}", "process", used_ids, report, f"processes[{len(processes)}].id")
+                    processes.append({**copy.deepcopy(template), "id": process_ref, "name": item.get("name") or self._name(process_ref)})
+                pool_index += 1
             else:
-                self._report(
-                    report,
-                    "INVALID_MESSAGE_FLOW_NODE_REMOVED",
-                    "Faux nœud messageFlow supprimé car sa source ou sa cible est absente.",
-                    f"nodes[{index}]",
-                    "warning",
-                )
-        return nodes, messages
+                process_ref = default_process
+            result.append({"id": identifier, "name": item.get("name") or self._name(identifier), "processRef": process_ref, "properties": self._properties(item)})
+            refs, _ = self._first(item, ("nodeRefs", "nodeIds", "nodes", "members"))
+            memberships.append((identifier, refs if isinstance(refs, list) else []))
+            lanes = item.get("lanes")
+            if isinstance(lanes, list):
+                for lane in lanes:
+                    if isinstance(lane, Mapping):
+                        nested_lanes.append({**dict(lane), "processRef": process_ref, "participantRef": identifier})
+            self._unknown(item, {"id", "name", "processRef", "properties", "type", "nodeRefs", "nodeIds", "nodes", "members", "lanes"}, f"participants[{index}]", report)
+        return result, references, memberships, nested_lanes
 
-    def _remove_parallel_gateway_conditions(
-        self,
-        nodes: list[dict[str, Any]],
-        flows: list[dict[str, Any]],
-        report: list[NormalizationEntry],
-    ) -> None:
-        """Remove conditions from outgoing parallel-gateway sequence flows."""
-        parallel_ids = {
-            node["id"] for node in nodes if node.get("type") == "parallelGateway"
-        }
-        for index, flow in enumerate(flows):
-            if flow.get("source") not in parallel_ids or flow.get("condition") in (None, ""):
-                continue
-            flow["condition"] = None
-            self._report(
-                report,
-                "PARALLEL_GATEWAY_CONDITION_REMOVED",
-                "Condition supprimée d'un flux sortant d'une passerelle parallèle.",
-                f"flows[{index}].condition",
-            )
-
-
-    def _normalize_process(
-        self, raw: Any, used_ids: set[str], report: list[NormalizationEntry]
-    ) -> dict[str, Any]:
-        """Normalize the single process descriptor."""
-        item = dict(raw) if isinstance(raw, Mapping) else {}
-        if not isinstance(raw, Mapping):
-            self._report(report, "FIELD_DEFAULTED", "Objet process créé.", "process")
-        process_id = self._assign_id(item.get("id"), "process", used_ids, report, "process.id")
-        result = {
-            "id": process_id,
-            "name": item.get("name") or self._name_from_id(process_id),
-            "description": item.get("description", ""),
-            "executable": item.get("executable", False),
-        }
-        self._report_unknown_fields(item, self._ALLOWED_FIELDS["process"], "process", report)
-        return result
-
-    def _normalize_participants(
-        self, raw: Any, used_ids: set[str], report: list[NormalizationEntry]
-    ) -> tuple[list[dict[str, Any]], dict[str, str]]:
-        """Normalize participants/pools and return their reference mapping."""
-        result: list[dict[str, Any]] = []
-        references: dict[str, str] = {}
-        for index, item in self._mapping_items(raw, "participants", report):
-            path = f"participants[{index}]"
+    def _normalize_lanes(self, raw, process_ids, participant_ids, participant_processes, default_process, used_ids, report):
+        result, references, memberships = [], {}, []
+        for index, item in self._items(raw, "lanes", report):
             old_id = item.get("id")
-            new_id = self._assign_id(old_id, "participant", used_ids, report, f"{path}.id")
-            self._remember_reference(references, old_id, new_id)
-            participant = {
-                "id": new_id,
-                "name": item.get("name") or self._name_from_id(new_id),
-                "type": item.get("type", "human"),
-            }
-            if "type" not in item:
-                self._report(report, "FIELD_DEFAULTED", "Type de participant générique ajouté.", f"{path}.type")
-            properties = item.get("properties")
-            if isinstance(properties, Mapping):
-                participant["properties"] = copy.deepcopy(dict(properties))
-            node_refs, node_refs_key = self._first_value(
-                item, ("nodeRefs", "nodeIds", "nodes", "members")
-            )
-            if node_refs_key is not None:
-                participant["_raw_node_refs"] = node_refs
-                participant["_node_refs_alias"] = node_refs_key
-            lane_raw, lane_alias = self._aliased_value(item, "lanes", None)
-            if lane_raw is not None:
-                if lane_alias != "lanes":
-                    self._report_alias(report, f"{path}.{lane_alias}", f"{path}.lanes")
-                participant["_raw_lanes"] = lane_raw
-            result.append(participant)
-            self._report_unknown_fields(item, self._participant_source_keys(), path, report)
+            identifier = self._assign_id(old_id, "lane", used_ids, report, f"lanes[{index}].id")
+            self._remember(references, old_id, identifier)
+            participant_ref = self._optional_ref(item.get("participantRef"), participant_ids)
+            explicit_process = item.get("processRef")
+            process_ref = self._resolve(explicit_process, process_ids) if explicit_process is not None else participant_processes.get(participant_ref, default_process)
+            result.append({
+                "id": identifier, "name": item.get("name") or self._name(identifier),
+                "processRef": process_ref, "participantRef": participant_ref,
+                "properties": self._properties(item),
+            })
+            refs, _ = self._first(item, ("nodeRefs", "nodeIds", "nodes", "members"))
+            memberships.append((identifier, refs if isinstance(refs, list) else []))
+            self._unknown(item, {"id", "name", "processRef", "participantRef", "properties", "nodeRefs", "nodeIds", "nodes", "members"}, f"lanes[{index}]", report)
+        return result, references, memberships
 
-        # Lane references depend on the complete node map and are finalized in
-        # a second pass after nodes have been normalized.
+    def _normalize_nodes(self, raw, process_ids, participant_ids, lane_ids, participants, lanes, legacy_participants, legacy_lanes, default_process, is_v2, used_ids, report):
+        prepared, references = [], {}
+        for index, item in self._items(raw, "nodes", report):
+            old_id = item.get("id")
+            node_type, legacy_timer = self._node_type(item.get("type"), report, f"nodes[{index}].type")
+            identifier = self._assign_id(old_id, self._prefix(node_type), used_ids, report, f"nodes[{index}].id")
+            self._remember(references, old_id, identifier)
+            prepared.append((index, item, identifier, node_type, legacy_timer))
+        result = []
+        for index, item, identifier, node_type, legacy_timer in prepared:
+            participant_raw = item.get("participantRef", item.get("poolRef"))
+            lane_raw = item.get("laneRef")
+            participant_ref = self._optional_ref(participant_raw, participant_ids)
+            lane_ref = self._optional_ref(lane_raw, lane_ids)
+            if participant_raw is None and not is_v2:
+                participant_ref = self._legacy_owner(item.get("id"), legacy_participants, participant_ids)
+            if lane_raw is None and not is_v2:
+                lane_ref = self._legacy_owner(item.get("id"), legacy_lanes, lane_ids)
+            process_raw = item.get("processRef")
+            if process_raw is not None:
+                process_ref = self._resolve(process_raw, process_ids)
+            elif not is_v2:
+                process_ref = (lanes.get(lane_ref, {}).get("processRef") or participants.get(participant_ref, {}).get("processRef") or default_process)
+            else:
+                process_ref = None
+            properties = self._properties(item)
+            if legacy_timer:
+                value = self._timer_value(item, properties)
+                properties["timer"] = {"kind": "duration", "value": self._duration_to_iso(value)} if value is not None else {"kind": "duration", "value": None}
+            result.append({
+                "id": identifier, "type": node_type, "name": item.get("name") or self._name(identifier),
+                "processRef": process_ref, "participantRef": participant_ref, "laneRef": lane_ref,
+                "actor": item.get("actor"), "properties": properties,
+            })
+            self._unknown(item, {"id", "type", "name", "processRef", "participantRef", "poolRef", "laneRef", "actor", "properties", "duration", "timerDuration", "value"}, f"nodes[{index}]", report)
         return result, references
 
-    def _finalize_participant_lanes(
-        self,
-        participants: list[dict[str, Any]],
-        used_ids: set[str],
-        node_ids: dict[str, str],
-        report: list[NormalizationEntry],
-    ) -> None:
-        """Normalize lanes nested in participants once node IDs are known."""
-        for index, participant in enumerate(participants):
-            raw_refs = participant.pop("_raw_node_refs", None)
-            refs_alias = participant.pop("_node_refs_alias", None)
-            if raw_refs is not None:
-                refs_path = f"participants[{index}].nodeRefs"
-                participant["nodeRefs"] = (
-                    [self._resolve_reference(ref, node_ids) for ref in raw_refs]
-                    if isinstance(raw_refs, list)
-                    else []
-                )
-                if refs_alias != "nodeRefs":
-                    self._report_alias(
-                        report,
-                        f"participants[{index}].{refs_alias}",
-                        refs_path,
-                    )
-                self._report_schema_extension(report, refs_path)
-            raw_lanes = participant.pop("_raw_lanes", None)
-            if raw_lanes is None:
-                continue
-            path = f"participants[{index}].lanes"
-            participant["lanes"] = self._normalize_lanes(
-                raw_lanes, used_ids, node_ids, report, path
-            )
-            self._report_schema_extension(report, path)
-
-    def _normalize_nodes(
-        self, raw: Any, used_ids: set[str], report: list[NormalizationEntry]
-    ) -> tuple[list[dict[str, Any]], dict[str, str]]:
-        """Normalize flow nodes and build old-to-new node references."""
-        result: list[dict[str, Any]] = []
-        references: dict[str, str] = {}
-        for index, item in self._mapping_items(raw, "nodes", report):
-            path = f"nodes[{index}]"
-            old_id = item.get("id")
-            node_type = self._normalize_node_type(item.get("type"), report, f"{path}.type")
-            prefix = self._id_prefix(node_type)
-            new_id = self._assign_id(old_id, prefix, used_ids, report, f"{path}.id")
-            self._remember_reference(references, old_id, new_id)
-            properties = copy.deepcopy(dict(item.get("properties", {}))) if isinstance(item.get("properties", {}), Mapping) else {}
-            node = {
-                "id": new_id,
-                "type": node_type,
-                "name": item.get("name") or self._name_from_id(new_id),
-                "actor": item.get("actor"),
-                "properties": properties,
-            }
-            if node_type == "serviceTask" and not node["actor"]:
-                node["actor"] = "system"
-                self._report(report, "ACTOR_DEFAULTED", "Acteur système ajouté à la tâche automatique.", f"{path}.actor")
-            elif node_type in self._NULL_ACTOR_TYPES:
-                node["actor"] = None
-            self._normalize_timer(node, item, report, path)
-            result.append(node)
-            self._report_unknown_fields(item, self._ALLOWED_FIELDS["node"] | {"duration", "timerDuration", "value"}, path, report)
-        return result, references
-
-    def _normalize_node_actors(
-        self,
-        nodes: list[dict[str, Any]],
-        participant_ids: dict[str, str],
-        report: list[NormalizationEntry],
-    ) -> None:
-        """Update actor references without inventing a business participant."""
-        for index, node in enumerate(nodes):
-            actor = node.get("actor")
-            if actor in participant_ids:
-                normalized = participant_ids[str(actor)]
-                if actor != normalized:
-                    node["actor"] = normalized
-                    self._report(report, "REFERENCE_UPDATED", "Référence d'acteur normalisée.", f"nodes[{index}].actor")
-
-    def _normalize_flows(
-        self,
-        raw: Any,
-        collection: str,
-        used_ids: set[str],
-        node_ids: dict[str, str],
-        participant_ids: dict[str, str],
-        report: list[NormalizationEntry],
-        default_type: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """Normalize sequence or message flow objects."""
-        result: list[dict[str, Any]] = []
-        for index, item in self._mapping_items(raw, collection, report):
-            path = f"{collection}[{index}]"
-            flow_id = self._assign_id(item.get("id"), "flow", used_ids, report, f"{path}.id")
-            source, source_key = self._first_value(item, self._FLOW_REF_ALIASES["source"])
-            target, target_key = self._first_value(item, self._FLOW_REF_ALIASES["target"])
-            normalized_source = self._resolve_reference(source, node_ids, participant_ids)
-            normalized_target = self._resolve_reference(target, node_ids, participant_ids)
-            condition = item.get("condition", item.get("conditionExpression"))
-            flow: dict[str, Any] = {
-                "id": flow_id,
-                "source": normalized_source,
-                "target": normalized_target,
-                "condition": condition,
-                "isDefault": bool(item.get("isDefault", False)),
-            }
-            flow_type = item.get("type", item.get("flowType", default_type))
-            if flow_type is not None:
-                flow["type"] = flow_type
-            if item.get("name"):
-                flow["name"] = item["name"]
-            if isinstance(item.get("properties"), Mapping):
-                flow["properties"] = copy.deepcopy(dict(item["properties"]))
-            if source_key != "source":
-                self._report_alias(report, f"{path}.{source_key}", f"{path}.source")
-            if target_key != "target":
-                self._report_alias(report, f"{path}.{target_key}", f"{path}.target")
-            if "conditionExpression" in item and "condition" not in item:
-                self._report_alias(report, f"{path}.conditionExpression", f"{path}.condition")
-            if source != normalized_source:
-                self._report(report, "REFERENCE_UPDATED", "Référence source normalisée.", f"{path}.source")
-            if target != normalized_target:
-                self._report(report, "REFERENCE_UPDATED", "Référence cible normalisée.", f"{path}.target")
+    def _normalize_flows(self, raw, collection, node_ids, process_ids, node_processes, default_process, is_v2, used_ids, report, message):
+        result = []
+        for index, item in self._items(raw, collection, report):
+            identifier = self._assign_id(item.get("id"), "message_flow" if message else "flow", used_ids, report, f"{collection}[{index}].id")
+            source, source_key = self._first(item, self._FLOW_ALIASES["source"])
+            target, target_key = self._first(item, self._FLOW_ALIASES["target"])
+            source = self._resolve(source, node_ids)
+            target = self._resolve(target, node_ids)
+            flow = {"id": identifier, "source": source, "target": target}
+            if item.get("name") is not None:
+                flow["name"] = str(item["name"])
+            if message:
+                flow["properties"] = self._properties(item)
+            else:
+                explicit = item.get("processRef")
+                if explicit is not None:
+                    process_ref = self._resolve(explicit, process_ids)
+                elif not is_v2:
+                    process_ref = node_processes.get(source) if node_processes.get(source) == node_processes.get(target) else default_process
+                else:
+                    process_ref = None
+                flow.update({
+                    "processRef": process_ref,
+                    "condition": item.get("condition", item.get("conditionExpression")),
+                    "isDefault": bool(item.get("isDefault", False)),
+                    "properties": self._properties(item),
+                })
+            if source_key and source_key != "source":
+                self._report(report, "KEY_NORMALIZED", f"Clé {source_key} convertie en source.", f"{collection}[{index}].source")
+            if target_key and target_key != "target":
+                self._report(report, "KEY_NORMALIZED", f"Clé {target_key} convertie en target.", f"{collection}[{index}].target")
+            self._unknown(item, {"id", "name", "source", "sourceRef", "source_id", "from", "target", "targetRef", "target_id", "to", "processRef", "condition", "conditionExpression", "isDefault", "properties", "type", "flowType"}, f"{collection}[{index}]", report)
             result.append(flow)
-            self._report_unknown_fields(item, self._flow_source_keys(), path, report)
         return result
 
-    def _normalize_lanes(
-        self,
-        raw: Any,
-        used_ids: set[str],
-        node_ids: dict[str, str],
-        report: list[NormalizationEntry],
-        base_path: str,
-    ) -> list[dict[str, Any]]:
-        """Normalize lane membership without applying layout semantics."""
-        result: list[dict[str, Any]] = []
-        for index, item in self._mapping_items(raw, base_path, report):
-            path = f"{base_path}[{index}]"
-            lane_id = self._assign_id(item.get("id"), "lane", used_ids, report, f"{path}.id")
-            refs, refs_key = self._first_value(item, ("nodeRefs", "nodeIds", "nodes", "members"))
-            normalized_refs = [self._resolve_reference(ref, node_ids) for ref in refs] if isinstance(refs, list) else []
-            lane: dict[str, Any] = {
-                "id": lane_id,
-                "name": item.get("name") or self._name_from_id(lane_id),
-                "nodeRefs": normalized_refs,
-            }
-            if isinstance(item.get("properties"), Mapping):
-                lane["properties"] = copy.deepcopy(dict(item["properties"]))
-            if refs_key != "nodeRefs":
-                self._report_alias(report, f"{path}.{refs_key}", f"{path}.nodeRefs")
-            result.append(lane)
-            self._report_unknown_fields(item, self._lane_source_keys(), path, report)
+    def _normalize_ambiguities(self, raw, node_ids, used_ids, report):
+        result = []
+        for index, item in self._items(raw, "ambiguities", report):
+            identifier = self._assign_id(item.get("id"), "ambiguity", used_ids, report, f"ambiguities[{index}].id")
+            related = item.get("relatedNode")
+            result.append({
+                "id": identifier, "message": str(item.get("message") or "Ambiguïté non décrite"),
+                "relatedNode": self._resolve(related, node_ids) if related is not None else None,
+                "severity": item.get("severity", "warning"),
+            })
         return result
 
-    def _normalize_ambiguities(
-        self, raw: Any, used_ids: set[str], node_ids: dict[str, str], report: list[NormalizationEntry]
-    ) -> list[dict[str, Any]]:
-        """Normalize ambiguity identifiers and related-node references."""
-        result: list[dict[str, Any]] = []
-        for index, item in self._mapping_items(raw, "ambiguities", report):
-            path = f"ambiguities[{index}]"
-            ambiguity = {key: copy.deepcopy(value) for key, value in item.items() if key in self._ALLOWED_FIELDS["ambiguity"]}
-            ambiguity["id"] = self._assign_id(item.get("id"), "ambiguity", used_ids, report, f"{path}.id")
-            if item.get("relatedNode") is not None:
-                ambiguity["relatedNode"] = self._resolve_reference(item["relatedNode"], node_ids)
-            result.append(ambiguity)
-            self._report_unknown_fields(item, self._ALLOWED_FIELDS["ambiguity"], path, report)
+    @staticmethod
+    def _membership_map(memberships):
+        result = {}
+        for owner, refs in memberships:
+            for ref in refs:
+                result.setdefault(str(ref), owner)
+                result.setdefault(WorkflowNormalizer._sanitize_id(ref), owner)
         return result
 
-    def _normalize_timer(
-        self, node: dict[str, Any], raw_node: dict[str, Any], report: list[NormalizationEntry], path: str
-    ) -> None:
-        """Convert simple timer durations to ISO 8601 when possible."""
-        if node.get("type") != "timerEvent":
-            return
-        properties = node["properties"]
-        value = properties.get("value")
-        source_path = f"{path}.properties.value"
-        if value is None:
-            for key in ("timerDuration", "duration", "value"):
-                if key in raw_node:
-                    value = raw_node[key]
-                    source_path = f"{path}.{key}"
-                    break
+    @staticmethod
+    def _legacy_owner(node_id, membership, owner_ids):
+        raw, sanitized = str(node_id), WorkflowNormalizer._sanitize_id(node_id)
+        owner = membership.get(raw, membership.get(sanitized))
+        return WorkflowNormalizer._resolve(owner, owner_ids) if owner is not None else None
+
+    def _node_type(self, value, report, path):
         if not isinstance(value, str):
-            return
-        iso_value = self._duration_to_iso(value)
-        properties["value"] = iso_value
-        if iso_value != value:
-            self._report(report, "TIMER_NORMALIZED", f"Durée '{value}' convertie en '{iso_value}'.", source_path)
-        elif not self._is_iso_duration(value):
-            self._report(report, "UNPARSED_TIMER", f"Durée de timer non interprétée : '{value}'.", source_path, "warning")
-
-    def _normalize_node_type(self, value: Any, report: list[NormalizationEntry], path: str) -> Any:
-        """Map common generated type spellings to canonical BPMN names."""
-        if not isinstance(value, str):
-            return value
+            return value, False
         key = re.sub(r"[\s-]+", "_", value.strip()).lower()
+        legacy_timer = key in {"timer_event", "timerevent"}
         normalized = self._NODE_TYPES.get(key, self._NODE_TYPES.get(key.replace("_", ""), value))
         if normalized != value:
-            self._report(report, "NODE_TYPE_NORMALIZED", f"Type '{value}' converti en '{normalized}'.", path)
-        return normalized
-
-    def _assign_id(
-        self,
-        value: Any,
-        prefix: str,
-        used_ids: set[str],
-        report: list[NormalizationEntry],
-        path: str,
-    ) -> str:
-        """Create, sanitize and globally uniquify an identifier."""
-        original = value
-        base = self._sanitize_id(value) if value is not None else ""
-        if not base:
-            base = prefix
-            self._report(report, "ID_GENERATED", f"Identifiant '{base}' créé.", path)
-        candidate = base
-        suffix = 2
-        while candidate in used_ids:
-            candidate = f"{base}_{suffix}"
-            suffix += 1
-        used_ids.add(candidate)
-        if original is not None and str(original) != candidate:
-            code = "DUPLICATE_ID_RENAMED" if candidate != base else "ID_NORMALIZED"
-            self._report(report, code, f"Identifiant '{original}' converti en '{candidate}'.", path)
-        return candidate
+            self._report(report, "NODE_TYPE_NORMALIZED", f"Type {value} converti en {normalized}.", path)
+        return normalized, legacy_timer
 
     @staticmethod
-    def _sanitize_id(value: Any) -> str:
-        """Return a lowercase ASCII identifier accepted by the current schema."""
-        text = unicodedata.normalize("NFKD", str(value)).encode("ascii", "ignore").decode("ascii")
-        text = re.sub(r"\s+", "_", text.strip().lower())
-        text = re.sub(r"[^a-z0-9_-]", "", text)
-        text = re.sub(r"_+", "_", text).strip("_-")
-        if text and not re.match(r"^[a-z_]", text):
-            text = f"id_{text}"
-        return text
+    def _properties(item):
+        value = item.get("properties", {})
+        return copy.deepcopy(dict(value)) if isinstance(value, Mapping) else {}
 
     @staticmethod
-    def _name_from_id(identifier: str) -> str:
-        """Derive a readable neutral name from an identifier."""
-        return identifier.replace("_", " ").strip().capitalize() or "Element"
-
-    @staticmethod
-    def _id_prefix(node_type: Any) -> str:
-        """Choose a neutral generated-ID prefix from an element type."""
-        prefixes = {
-            "startEvent": "start_event",
-            "endEvent": "end_event",
-            "serviceTask": "service_task",
-            "userTask": "user_task",
-            "exclusiveGateway": "exclusive_gateway",
-            "parallelGateway": "parallel_gateway",
-            "inclusiveGateway": "inclusive_gateway",
-            "subProcess": "sub_process",
-            "timerEvent": "timer_event",
-        }
-        return prefixes.get(node_type, "node")
-
-    @staticmethod
-    def _remember_reference(references: dict[str, str], old_id: Any, new_id: str) -> None:
-        """Map an original ID to its first occurrence, resolving ambiguity safely."""
-        if old_id is not None:
-            references.setdefault(str(old_id), new_id)
-            references.setdefault(WorkflowNormalizer._sanitize_id(old_id), new_id)
-
-    @staticmethod
-    def _resolve_reference(value: Any, *reference_maps: dict[str, str]) -> Any:
-        """Resolve a reference through ordered element namespaces."""
-        if value is None:
-            return None
-        raw = str(value)
-        sanitized = WorkflowNormalizer._sanitize_id(value)
-        for references in reference_maps:
-            if raw in references:
-                return references[raw]
-            if sanitized in references:
-                return references[sanitized]
-        return sanitized or value
+    def _timer_value(item, properties):
+        timer = properties.get("timer")
+        if isinstance(timer, Mapping) and timer.get("value") is not None:
+            return str(timer["value"])
+        for key in ("value", "timerDuration", "duration"):
+            if item.get(key) is not None:
+                return str(item[key])
+            if properties.get(key) is not None:
+                return str(properties[key])
+        return None
 
     @classmethod
-    def _duration_to_iso(cls, value: str) -> str:
-        """Convert supported natural-language durations to ISO 8601."""
+    def _duration_to_iso(cls, value):
+        if value is None:
+            return None
         match = cls._TIMER_PATTERN.match(value)
         if not match:
             return value
@@ -590,21 +349,13 @@ class WorkflowNormalizer:
             return f"P{amount}D"
         return f"P{amount * 7}D"
 
-    @staticmethod
-    def _is_iso_duration(value: str) -> bool:
-        """Recognize the common ISO 8601 duration forms without fully parsing them."""
-        return bool(re.fullmatch(r"P(?=\d|T\d)(?:\d+D)?(?:T(?:\d+H)?(?:\d+M)?(?:\d+S)?)?", value, re.IGNORECASE))
-
-    def _mapping_items(
-        self, raw: Any, path: str, report: list[NormalizationEntry]
-    ) -> list[tuple[int, dict[str, Any]]]:
-        """Return mapping items from a list and report unusable values."""
+    def _items(self, raw, path, report):
         if raw is None:
             return []
         if not isinstance(raw, list):
             self._report(report, "INVALID_COLLECTION", "La valeur doit être une liste.", path, "warning")
             return []
-        result: list[tuple[int, dict[str, Any]]] = []
+        result = []
         for index, item in enumerate(raw):
             if isinstance(item, Mapping):
                 result.append((index, dict(item)))
@@ -612,79 +363,83 @@ class WorkflowNormalizer:
                 self._report(report, "INVALID_ELEMENT", "Élément non objet ignoré.", f"{path}[{index}]", "warning")
         return result
 
+    def _assign_id(self, value, prefix, used_ids, report, path):
+        original = value
+        base = self._sanitize_id(value) if value is not None else ""
+        if not base:
+            base = prefix
+            self._report(report, "ID_GENERATED", f"Identifiant {base} créé.", path)
+        candidate, suffix = base, 2
+        while candidate in used_ids:
+            candidate, suffix = f"{base}_{suffix}", suffix + 1
+        used_ids.add(candidate)
+        if original is not None and str(original) != candidate:
+            code = "DUPLICATE_ID_RENAMED" if candidate != base else "ID_NORMALIZED"
+            self._report(report, code, f"Identifiant {original} converti en {candidate}.", path)
+        return candidate
+
     @staticmethod
-    def _first_value(item: Mapping[str, Any], keys: tuple[str, ...]) -> tuple[Any, str | None]:
-        """Return the first present alias and its key."""
+    def _sanitize_id(value):
+        text = unicodedata.normalize("NFKD", str(value)).encode("ascii", "ignore").decode("ascii")
+        text = re.sub(r"\s+", "_", text.strip().lower())
+        text = re.sub(r"[^a-z0-9_-]", "", text)
+        text = re.sub(r"_+", "_", text).strip("_-")
+        return f"id_{text}" if text and not re.match(r"^[a-z_]", text) else text
+
+    @staticmethod
+    def _remember(mapping, old, new):
+        if old is not None:
+            mapping.setdefault(str(old), new)
+            mapping.setdefault(WorkflowNormalizer._sanitize_id(old), new)
+
+    @staticmethod
+    def _resolve(value, *mappings):
+        if value is None:
+            return None
+        raw, sanitized = str(value), WorkflowNormalizer._sanitize_id(value)
+        for mapping in mappings:
+            if raw in mapping:
+                return mapping[raw]
+            if sanitized in mapping:
+                return mapping[sanitized]
+        return sanitized or value
+
+    @classmethod
+    def _optional_ref(cls, value, mapping):
+        return None if value in (None, "") else cls._resolve(value, mapping)
+
+    @staticmethod
+    def _first(item, keys):
         for key in keys:
             if key in item:
                 return item[key], key
         return None, None
 
-    def _aliased_value(
-        self, item: Mapping[str, Any], canonical: str, default: Any
-    ) -> tuple[Any, str | None]:
-        """Read a canonical field or a useful supported alias.
+    @staticmethod
+    def _name(identifier):
+        return identifier.replace("_", " ").strip().capitalize() or "Element"
 
-        Generated payloads sometimes contain an empty canonical collection and
-        a populated alias.  In that case the populated value carries more
-        information and is selected without merging or duplicating elements.
-        """
-        aliases = self._ALIASES[canonical]
-        if canonical in item and item[canonical] not in (None, [], {}):
-            return item[canonical], canonical
-        for key in aliases:
-            if key != canonical and key in item and item[key] not in (None, [], {}):
-                return item[key], key
-        value, key = self._first_value(item, aliases)
-        return (default, None) if key is None else (value, key)
+    @staticmethod
+    def _prefix(node_type):
+        return {
+            "startEvent": "start_event", "endEvent": "end_event", "userTask": "user_task",
+            "serviceTask": "service_task", "manualTask": "manual_task", "scriptTask": "script_task",
+            "businessRuleTask": "business_rule_task", "sendTask": "send_task", "receiveTask": "receive_task",
+            "exclusiveGateway": "exclusive_gateway", "parallelGateway": "parallel_gateway",
+            "inclusiveGateway": "inclusive_gateway", "eventBasedGateway": "event_based_gateway",
+            "subProcess": "sub_process", "intermediateCatchEvent": "intermediate_catch_event",
+            "intermediateThrowEvent": "intermediate_throw_event",
+        }.get(node_type, "node")
 
-    def _report_unknown_fields(
-        self,
-        item: Mapping[str, Any],
-        allowed: set[str],
-        path: str,
-        report: list[NormalizationEntry],
-    ) -> None:
-        """Report every field omitted because the target contract disallows it."""
+    def _unknown(self, item, allowed, path, report):
         for key in item.keys() - allowed:
-            field_path = f"{path}.{key}" if path else key
-            self._report(report, "UNKNOWN_FIELD_REMOVED", f"Champ non reconnu '{key}' retiré de la sortie normalisée.", field_path, "warning")
-
-    def _report_schema_extension(self, report: list[NormalizationEntry], path: str) -> None:
-        """Explain useful fields retained beyond the closed schema 1.0.0."""
-        self._report(report, "SCHEMA_EXTENSION_PRESERVED", "Extension BPMN utile conservée malgré le schéma 1.0.0 fermé.", path, "warning")
-
-    @classmethod
-    def _source_top_level_keys(cls) -> set[str]:
-        return cls._TOP_LEVEL_KEYS | {alias for aliases in cls._ALIASES.values() for alias in aliases}
-
-    @classmethod
-    def _participant_source_keys(cls) -> set[str]:
-        return (
-            cls._ALLOWED_FIELDS["participant"]
-            | set(cls._ALIASES["lanes"])
-            | {"nodeIds", "nodes", "members"}
-        )
+            field = f"{path}.{key}" if path else key
+            self._report(report, "UNKNOWN_FIELD_REMOVED", f"Champ non reconnu {key} retiré.", field, "warning")
 
     @staticmethod
-    def _lane_source_keys() -> set[str]:
-        return {"id", "name", "nodeRefs", "nodeIds", "nodes", "members", "properties"}
-
-    @classmethod
-    def _flow_source_keys(cls) -> set[str]:
-        return cls._ALLOWED_FIELDS["flow"] | {key for keys in cls._FLOW_REF_ALIASES.values() for key in keys} | {"conditionExpression", "flowType"}
-
-    @staticmethod
-    def _report_alias(report: list[NormalizationEntry], source: str, target: str) -> None:
-        WorkflowNormalizer._report(report, "KEY_NORMALIZED", f"Clé '{source}' convertie en '{target}'.", target)
-
-    @staticmethod
-    def _report(
-        report: list[NormalizationEntry], code: str, message: str, path: str, severity: str = "info"
-    ) -> None:
+    def _report(report, code, message, path, severity="info"):
         report.append(WorkflowNormalizer._entry(code, message, path, severity))
 
     @staticmethod
-    def _entry(code: str, message: str, path: str, severity: str = "info") -> NormalizationEntry:
-        """Build a stable normalization-report entry."""
+    def _entry(code, message, path, severity="info"):
         return {"code": code, "message": message, "path": path, "severity": severity}

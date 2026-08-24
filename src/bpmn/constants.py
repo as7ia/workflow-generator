@@ -32,7 +32,6 @@ NODE_TAGS = {
     "eventBasedGateway": "eventBasedGateway",
     "intermediateCatchEvent": "intermediateCatchEvent",
     "intermediateThrowEvent": "intermediateThrowEvent",
-    "timerEvent": "intermediateCatchEvent",
     "subProcess": "subProcess",
 }
 
@@ -50,7 +49,6 @@ EVENT_TYPES = {
     "endEvent",
     "intermediateCatchEvent",
     "intermediateThrowEvent",
-    "timerEvent",
 }
 
 

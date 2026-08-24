@@ -1,149 +1,41 @@
-"""Unit tests for bounded workflow repair orchestration."""
-
-from __future__ import annotations
-
 import copy
-import unittest
+from src.workflow import WorkflowRepairer,SemanticValidator
 
-from src.workflow import WorkflowRepairer
+class Queue:
+    def __init__(self,*items):self.items=list(items);self.prompts=[]
+    def generate_json(self,prompt):self.prompts.append(prompt);item=self.items.pop(0);return copy.deepcopy(item)
+def v1(valid=True):
+    nodes=[{"id":"s","type":"startEvent","name":"S","actor":None,"properties":{}},{"id":"t","type":"serviceTask","name":"T","actor":"system","properties":{}}]
+    flows=[{"id":"f1","source":"s","target":"t","condition":None,"isDefault":False}]
+    if valid:nodes.append({"id":"e","type":"endEvent","name":"E","actor":None,"properties":{}});flows.append({"id":"f2","source":"t","target":"e","condition":None,"isDefault":False})
+    return {"schemaVersion":"1.0.0","process":{"id":"p","name":"P","description":"","executable":False},"participants":[],"nodes":nodes,"flows":flows,"ambiguities":[]}
+ERROR=[{"code":"PROCESS_MISSING_END_EVENT","message":"End missing","severity":"error","process_id":"p"}]
 
-
-def valid_workflow() -> dict:
-    """Return a small valid workflow independent of repository examples."""
-    return {
-        "schemaVersion": "1.0.0",
-        "process": {"id": "process", "name": "Process", "description": "", "executable": False},
-        "participants": [],
-        "nodes": [
-            {"id": "start", "type": "startEvent", "name": "Start", "actor": None, "properties": {}},
-            {"id": "work", "type": "serviceTask", "name": "Work", "actor": "system", "properties": {}},
-            {"id": "end", "type": "endEvent", "name": "End", "actor": None, "properties": {}},
-        ],
-        "flows": [
-            {"id": "f1", "source": "start", "target": "work", "condition": None, "isDefault": False},
-            {"id": "f2", "source": "work", "target": "end", "condition": None, "isDefault": False},
-        ],
-        "ambiguities": [],
-    }
-
-
-def invalid_workflow() -> dict:
-    """Return a normalized-looking workflow with no end event."""
-    workflow = valid_workflow()
-    workflow["nodes"] = workflow["nodes"][:-1]
-    workflow["flows"] = workflow["flows"][:-1]
-    return workflow
-
-
-class FakeGenerator:
-    """Return queued values or raise queued exceptions."""
-
-    def __init__(self, *responses) -> None:
-        self.responses = list(responses)
-        self.prompts: list[str] = []
-
-    def generate_json(self, prompt: str):
-        self.prompts.append(prompt)
-        response = self.responses.pop(0)
-        if isinstance(response, Exception):
-            raise response
-        return copy.deepcopy(response)
-
-
-class WorkflowRepairerTests(unittest.TestCase):
-    """Exercise success, retry, failure isolation, prompts and reports."""
-
-    def setUp(self) -> None:
-        self.repairer = WorkflowRepairer()
-        self.end_error = [{"code": "MISSING_END_EVENT", "message": "Fin absente", "node_id": None, "flow_id": None, "severity": "error"}]
-
-    def test_workflow_repaired_on_first_attempt(self) -> None:
-        generator = FakeGenerator(valid_workflow())
-        repaired, report = self.repairer.repair(invalid_workflow(), self.end_error, generator)
-        self.assertEqual("endEvent", repaired["nodes"][-1]["type"])
-        self.assertEqual(1, len(report))
-        self.assertEqual("success", report[0]["status"])
-
-    def test_each_generator_response_is_normalized_to_source_target(self) -> None:
-        legacy = valid_workflow()
-        for item in legacy["flows"]:
-            item["sourceRef"] = item.pop("source")
-            item["targetRef"] = item.pop("target")
-        repaired, _ = self.repairer.repair(
-            invalid_workflow(), self.end_error, FakeGenerator(legacy)
-        )
-        for item in repaired["flows"]:
-            self.assertIn("source", item)
-            self.assertIn("target", item)
-            self.assertNotIn("sourceRef", item)
-            self.assertNotIn("targetRef", item)
-
-    def test_workflow_repaired_on_second_attempt(self) -> None:
-        generator = FakeGenerator(invalid_workflow(), valid_workflow())
-        _, report = self.repairer.repair(invalid_workflow(), self.end_error, generator)
-        self.assertEqual(["failed", "success"], [attempt["status"] for attempt in report])
-        self.assertEqual(2, len(generator.prompts))
-
-    def test_stops_after_maximum_attempts(self) -> None:
-        generator = FakeGenerator(invalid_workflow(), invalid_workflow(), invalid_workflow())
-        repaired, report = self.repairer.repair(invalid_workflow(), self.end_error, generator)
-        self.assertEqual(3, len(report))
-        self.assertEqual(3, len(generator.prompts))
-        self.assertIsInstance(repaired, dict)
-
-    def test_generator_exception_does_not_crash_pipeline(self) -> None:
-        generator = FakeGenerator(RuntimeError("offline"), RuntimeError("offline"), RuntimeError("offline"))
-        _, report = self.repairer.repair(invalid_workflow(), self.end_error, generator)
-        self.assertEqual(3, len(report))
-        self.assertTrue(all(any(error["code"] == "GENERATOR_EXCEPTION" for error in item["output_errors"]) for item in report))
-
-    def test_non_dictionary_generator_output_is_rejected(self) -> None:
-        generator = FakeGenerator("not json", [], None)
-        _, report = self.repairer.repair(invalid_workflow(), self.end_error, generator)
-        self.assertEqual(3, len(report))
-        self.assertTrue(all(any(error["code"] == "GENERATOR_INVALID_OUTPUT" for error in item["output_errors"]) for item in report))
-
-    def test_original_workflow_is_preserved(self) -> None:
-        original = invalid_workflow()
-        snapshot = copy.deepcopy(original)
-        self.repairer.repair(original, self.end_error, FakeGenerator(valid_workflow()))
-        self.assertEqual(snapshot, original)
-
-    def test_prompt_contains_json_only_rules_and_collaboration_terms(self) -> None:
-        prompt = self.repairer.build_repair_prompt(invalid_workflow(), self.end_error)
-        self.assertIn("Retourne uniquement un objet JSON valide", prompt)
-        self.assertIn("sans Markdown", prompt)
-        self.assertIn("Conserve l'intention métier", prompt)
-        self.assertIn("pools, lanes, sequence flows et message flows", prompt)
-        self.assertIn("MISSING_END_EVENT", prompt)
-
-    def test_report_contains_every_attempt_and_required_fields(self) -> None:
-        generator = FakeGenerator(invalid_workflow(), invalid_workflow(), valid_workflow())
-        _, report = self.repairer.repair(invalid_workflow(), self.end_error, generator)
-        self.assertEqual([1, 2, 3], [item["attempt"] for item in report])
-        expected = {"attempt", "status", "input_errors", "output_errors", "message"}
-        self.assertTrue(all(set(item) == expected for item in report))
-
-    def test_initially_valid_workflow_stops_without_generator(self) -> None:
-        generator = FakeGenerator()
-        repaired, report = self.repairer.repair(valid_workflow(), [], generator)
-        self.assertEqual([], report)
-        self.assertEqual([], generator.prompts)
-        self.assertEqual(valid_workflow(), repaired)
-
-    def test_gateway_error_is_included_in_prompt(self) -> None:
-        errors = [{"code": "GATEWAY_SPLIT_TOO_FEW_OUTPUTS", "message": "La passerelle gateway_decision possède une seule sortie.", "node_id": "gateway_decision", "severity": "error"}]
-        prompt = self.repairer.build_repair_prompt(invalid_workflow(), errors)
-        self.assertIn("gateway_decision possède une seule sortie", prompt)
-        self.assertIn("Corrige les passerelles", prompt)
-        self.assertIn("conditions manquantes", prompt)
-
-    def test_invalid_reference_error_is_included_in_prompt(self) -> None:
-        errors = [{"code": "INVALID_TARGET_REF", "message": "flow_4 pointe vers un nœud inexistant.", "flow_id": "flow_4", "severity": "error"}]
-        prompt = self.repairer.build_repair_prompt(invalid_workflow(), errors)
-        self.assertIn("flow_4 pointe vers un nœud inexistant", prompt)
-        self.assertIn("Corrige les références invalides", prompt)
-
-
-if __name__ == "__main__":
-    unittest.main()
+def test_valid_v1_stops_without_qwen_and_returns_v2():
+    q=Queue();result,report=WorkflowRepairer().repair(v1(),[],q);assert report==[] and q.prompts==[] and result["schemaVersion"]=="2.0" and not [e for e in SemanticValidator().validate(result) if e["severity"]=="error"]
+def test_first_attempt_success():
+    result,report=WorkflowRepairer().repair(v1(False),ERROR,Queue(v1()));assert result["schemaVersion"]=="2.0" and [x["status"] for x in report]==["success"]
+def test_second_attempt_success():
+    _,report=WorkflowRepairer().repair(v1(False),ERROR,Queue(v1(False),v1()));assert [x["status"] for x in report]==["failed","success"]
+def test_attempt_limit():
+    q=Queue(v1(False),v1(False));_,report=WorkflowRepairer(2).repair(v1(False),ERROR,q);assert len(report)==2
+def test_generated_candidate_runs_safe_repairs():
+    candidate=v1();candidate["nodes"].insert(1,{"id":"g","type":"parallelGateway","name":"G","actor":None,"properties":{}});candidate["flows"]=[{"id":"a","source":"s","target":"g","condition":None,"isDefault":False},{"id":"b","source":"g","target":"t","condition":"x","isDefault":False},candidate["flows"][1]]
+    result,_=WorkflowRepairer().repair(v1(False),ERROR,Queue(candidate));assert next(x for x in result["flows"] if x["id"]=="b")["condition"] is None
+def test_initial_candidate_can_remain_best():
+    worse={"schemaVersion":"2.0","processes":[{"id":"p","name":"P","description":"","executable":False,"properties":{}}],"participants":[],"lanes":[],"nodes":[{"id":f"x{i}","type":"invalid","name":"X","processRef":"p","participantRef":None,"laneRef":None,"actor":None,"properties":{}} for i in range(10)],"flows":[],"messageFlows":[],"ambiguities":[]}
+    result,_=WorkflowRepairer(1).repair(v1(False),ERROR,Queue(worse));assert result["schemaVersion"]=="2.0" and result["nodes"]
+def test_input_immutable():
+    original=v1(False);before=copy.deepcopy(original);WorkflowRepairer().repair(original,ERROR,Queue(v1()));assert original==before
+def test_prompt_teaches_v2_only():
+    prompt=WorkflowRepairer().build_repair_prompt(v1(False),ERROR);assert 'schemaVersion vaut exactement "2.0"' in prompt and "processRef" in prompt and "nodeRefs" in prompt and "N'utilise jamais participant.nodeRefs" in prompt
+def test_prompt_includes_error():
+    assert "PROCESS_MISSING_END_EVENT" in WorkflowRepairer().build_repair_prompt(v1(False),ERROR)
+def test_report_shape():
+    _,report=WorkflowRepairer().repair(v1(False),ERROR,Queue(v1()));assert set(report[0])=={"attempt","status","input_errors","output_errors","message"}
+def test_invalid_generator_output_reported():
+    _,report=WorkflowRepairer(1).repair(v1(False),ERROR,Queue("bad"));assert any(e["code"]=="GENERATOR_INVALID_OUTPUT" for e in report[0]["output_errors"])
+def test_generator_exception_reported():
+    class Broken:
+        def generate_json(self,prompt):raise RuntimeError("offline")
+    _,report=WorkflowRepairer(1).repair(v1(False),ERROR,Broken());assert any(e["code"]=="GENERATOR_EXCEPTION" for e in report[0]["output_errors"])

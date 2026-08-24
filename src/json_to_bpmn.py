@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from bpmn import BPMNGenerator, BPMNLayoutEngine
-from workflow import WorkflowGraphAnalyzer
+from workflow import SemanticValidator, WorkflowGraphAnalyzer, WorkflowNormalizer
 
 
 def convert_json_to_bpmn(json_path: str | Path, output_path: str | Path) -> str:
@@ -19,9 +19,18 @@ def convert_json_to_bpmn(json_path: str | Path, output_path: str | Path) -> str:
     if not isinstance(workflow, dict):
         raise TypeError("Le workflow JSON doit être un objet.")
 
-    analysis = WorkflowGraphAnalyzer().analyze(workflow)
-    layout = BPMNLayoutEngine().layout(workflow, analysis)
-    xml = BPMNGenerator().generate(workflow, layout)
+    canonical = WorkflowNormalizer().normalize(workflow)
+    issues = SemanticValidator().validate(canonical)
+    blocking = [issue for issue in issues if issue.get("severity", "error") == "error"]
+    if blocking:
+        details = "; ".join(
+            f"[{issue.get('code', 'ERROR')}] {issue.get('message', 'Erreur de validation')}"
+            for issue in blocking
+        )
+        raise ValueError(f"Workflow invalide après normalisation v2 : {details}")
+    analysis = WorkflowGraphAnalyzer().analyze(canonical)
+    layout = BPMNLayoutEngine().layout(canonical, analysis)
+    xml = BPMNGenerator().generate(canonical, layout)
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(xml, encoding="utf-8")
     return xml

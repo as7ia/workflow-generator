@@ -16,6 +16,7 @@ from typing import Any, Protocol
 
 from .normalizer import WorkflowNormalizer
 from .semantic_validator import SemanticValidator
+from .preparation import CanonicalWorkflowPreparer
 
 
 RepairError = dict[str, Any]
@@ -35,15 +36,14 @@ class WorkflowRepairer:
 
     MAX_ATTEMPTS = 3
 
-    def __init__(self, max_attempts: int | None = None) -> None:
+    def __init__(self, max_attempts: int | None = None, schema: dict[str, Any] | None = None) -> None:
         """Create a repairer with an optional positive attempt limit."""
         limit = self.MAX_ATTEMPTS if max_attempts is None else max_attempts
         if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
             raise ValueError("max_attempts doit être un entier strictement positif")
         self.max_attempts = limit
-        self._normalizer = WorkflowNormalizer()
-        self._semantic_validator = SemanticValidator()
-        self._schema = self._load_effective_schema()
+        self._schema = copy.deepcopy(schema) if isinstance(schema, dict) else self._load_effective_schema()
+        self._preparer = CanonicalWorkflowPreparer(self._schema)
 
     def repair(
         self,
@@ -59,8 +59,9 @@ class WorkflowRepairer:
         such as intentional loops, do not trigger another repair.
         """
         original = copy.deepcopy(workflow) if isinstance(workflow, Mapping) else {}
-        current = self._normalizer.normalize(original)
-        current_errors = self._validate(current)
+        prepared = self._preparer.prepare(original)
+        current = prepared["workflow"]
+        current_errors = prepared["errors"]
         report: list[RepairAttempt] = []
 
         if self._is_valid(current_errors):
@@ -109,8 +110,9 @@ class WorkflowRepairer:
                 prompt_errors = current_errors
                 continue
 
-            candidate = self._normalizer.normalize(copy.deepcopy(dict(generated)))
-            output_errors = self._validate(candidate)
+            prepared = self._preparer.prepare(copy.deepcopy(dict(generated)))
+            candidate = prepared["workflow"]
+            output_errors = prepared["errors"]
             candidate_score = self._score(output_errors)
             if candidate_score < best_score:
                 best = copy.deepcopy(candidate)
@@ -147,6 +149,12 @@ class WorkflowRepairer:
         self, workflow: dict[str, Any], errors: list[dict[str, Any]]
     ) -> str:
         """Build a strict JSON-only repair prompt containing structured errors."""
+        try:
+            from ..generation.prompts import build_repair_prompt
+        except ImportError:  # pragma: no cover - PYTHONPATH=src entry point.
+            from generation.prompts import build_repair_prompt
+        return build_repair_prompt(workflow, errors, self._schema)
+        """Previous prompt implementation retained below temporarily unreachable."""
         error_lines = []
         for error in errors if isinstance(errors, list) else []:
             if not isinstance(error, Mapping):
@@ -211,10 +219,13 @@ class WorkflowRepairer:
         return not any(error.get("severity", "error") == "error" for error in errors)
 
     @staticmethod
-    def _score(errors: list[RepairError]) -> tuple[int, int]:
-        """Rank candidates by blocking errors first, then total issues."""
+    def _score(errors: list[RepairError]) -> tuple[int, int, int, int]:
+        """Rank blocking, critical structural, total issues, then warnings."""
         blocking = sum(error.get("severity", "error") == "error" for error in errors)
-        return blocking, len(errors)
+        prefixes=("JSON_SCHEMA","MISSING_","PROCESS_MISSING","UNKNOWN_","FLOW_PROCESS","SEQUENCE_FLOW_CROSSES")
+        critical=sum(error.get("severity","error")=="error" and str(error.get("code","")).startswith(prefixes) for error in errors)
+        warnings=sum(error.get("severity")=="warning" for error in errors)
+        return blocking,critical,len(errors),warnings
 
     @staticmethod
     def _attempt(
