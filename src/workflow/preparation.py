@@ -15,7 +15,8 @@ class CanonicalWorkflowPreparer:
     def __init__(self,schema:dict[str,Any]):
         self.schema=copy.deepcopy(schema);self.normalizer=WorkflowNormalizer();self.semantic=SemanticValidator()
 
-    def prepare(self,workflow:dict[str,Any])->dict[str,Any]:
+    def prepare_and_validate(self,workflow:dict[str,Any])->dict[str,Any]:
+        """Run the sole normalize -> safe repair -> schema -> semantic chain."""
         normalized,normalization_report=self.normalizer.normalize_with_report(copy.deepcopy(workflow))
         prepared,safe_report=self.apply_safe_repairs(normalized)
         from .repair import _StandardSchemaValidator
@@ -23,6 +24,10 @@ class CanonicalWorkflowPreparer:
         semantic_errors=self.semantic.validate(prepared)
         return {"workflow":prepared,"normalization_report":normalization_report,"safe_repair_report":safe_report,
                 "schema_errors":schema_errors,"semantic_errors":semantic_errors,"errors":[*schema_errors,*semantic_errors]}
+
+    def prepare(self,workflow:dict[str,Any])->dict[str,Any]:
+        """Backward-compatible alias for :meth:`prepare_and_validate`."""
+        return self.prepare_and_validate(workflow)
 
     @classmethod
     def apply_safe_repairs(cls,workflow:dict[str,Any])->tuple[dict[str,Any],list[dict[str,Any]]]:

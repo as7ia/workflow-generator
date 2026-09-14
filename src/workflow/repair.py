@@ -59,7 +59,7 @@ class WorkflowRepairer:
         such as intentional loops, do not trigger another repair.
         """
         original = copy.deepcopy(workflow) if isinstance(workflow, Mapping) else {}
-        prepared = self._preparer.prepare(original)
+        prepared = self._preparer.prepare_and_validate(original)
         current = prepared["workflow"]
         current_errors = prepared["errors"]
         report: list[RepairAttempt] = []
@@ -110,7 +110,7 @@ class WorkflowRepairer:
                 prompt_errors = current_errors
                 continue
 
-            prepared = self._preparer.prepare(copy.deepcopy(dict(generated)))
+            prepared = self._preparer.prepare_and_validate(copy.deepcopy(dict(generated)))
             candidate = prepared["workflow"]
             output_errors = prepared["errors"]
             candidate_score = self._score(output_errors)

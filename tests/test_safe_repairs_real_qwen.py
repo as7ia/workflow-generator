@@ -71,6 +71,18 @@ def test_real_qwen_shared_process_is_split_and_flows_are_reclassified():
     assert forbidden.isdisjoint({issue["code"] for issue in SemanticValidator().validate(fixed)})
 
 
+def test_prepare_and_validate_runs_safe_repairs_before_both_validators():
+    prepared = CanonicalWorkflowPreparer(SCHEMA).prepare_and_validate(three_pool_workflow())
+    fixed = prepared["workflow"]
+    participant_by_id = {participant["id"]: participant for participant in fixed["participants"]}
+    assert len(fixed["processes"]) == 3
+    assert len({participant["processRef"] for participant in fixed["participants"]}) == 3
+    assert all(node["processRef"] == participant_by_id[node["participantRef"]]["processRef"] for node in fixed["nodes"])
+    assert all(lane["processRef"] == participant_by_id[lane["participantRef"]]["processRef"] for lane in fixed["lanes"])
+    forbidden = {"MULTIPLE_PARTICIPANTS_FOR_PROCESS", "MESSAGE_FLOW_WITHIN_SAME_PROCESS", "SEQUENCE_FLOW_CROSSES_PROCESSES"}
+    assert forbidden.isdisjoint({issue["code"] for issue in prepared["semantic_errors"]})
+
+
 @pytest.mark.parametrize(("raw", "expected"), [("3 days", "P3D"), ("5 minutes", "PT5M"), ("2 hours", "PT2H")])
 def test_v2_simple_timer_duration_is_normalized(raw, expected):
     workflow = three_pool_workflow()
@@ -78,6 +90,15 @@ def test_v2_simple_timer_duration_is_normalized(raw, expected):
     workflow["nodes"][1]["properties"] = {"timer": {"kind": "duration", "value": raw}}
     fixed, _ = CanonicalWorkflowPreparer.apply_safe_repairs(workflow)
     assert fixed["nodes"][1]["properties"]["timer"]["value"] == expected
+
+
+def test_prepare_and_validate_normalizes_real_v2_timer_before_semantics():
+    workflow = three_pool_workflow()
+    workflow["nodes"][1]["type"] = "intermediateCatchEvent"
+    workflow["nodes"][1]["properties"] = {"timer": {"kind": "duration", "value": "3 days"}}
+    prepared = CanonicalWorkflowPreparer(SCHEMA).prepare_and_validate(workflow)
+    assert prepared["workflow"]["nodes"][1]["properties"]["timer"]["value"] == "P3D"
+    assert "INVALID_TIMER_DURATION" not in {issue["code"] for issue in prepared["semantic_errors"]}
 
 
 def test_ambiguous_timer_is_left_for_semantic_repair():
@@ -111,6 +132,15 @@ def test_three_pool_pipeline_needs_no_qwen_repair_attempt():
     assert result["success"]
     assert result["repair_report"] == []
     assert len(generator.prompts) == 1
+
+
+def test_compiler_returns_post_safe_repair_normalized_workflow():
+    generator = QueueGenerator(three_pool_workflow())
+    compiler = WorkflowCompiler(generator, SCHEMA_PATH)
+    compiler._bpmn_generator = XmlGenerator()
+    result = compiler.compile("real qwen-shaped collaboration")
+    assert len(result["normalized_workflow"]["processes"]) == 3
+    assert len({participant["processRef"] for participant in result["normalized_workflow"]["participants"]}) == 3
 
 
 def test_prompts_state_collaboration_and_targeted_repair_rules():

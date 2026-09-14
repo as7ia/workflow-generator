@@ -79,7 +79,7 @@ class WorkflowCompiler:
 
         preparer = CanonicalWorkflowPreparer(schema)
         try:
-            prepared = preparer.prepare(dict(raw))
+            prepared = preparer.prepare_and_validate(dict(raw))
             normalized = prepared["workflow"]
             result["normalized_workflow"] = normalized
             result["warnings"].extend(
@@ -106,7 +106,7 @@ class WorkflowCompiler:
                     errors=blocking,
                     generator=self.generator,
                 )
-                prepared = preparer.prepare(repaired_workflow)
+                prepared = preparer.prepare_and_validate(repaired_workflow)
                 normalized = prepared["workflow"]
                 result["normalized_workflow"] = normalized
                 result["warnings"].extend(
