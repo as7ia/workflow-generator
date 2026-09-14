@@ -85,22 +85,40 @@ class QwenWorkflowGenerator:
             rendered = self.tokenizer.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=True
             )
-        inputs = self.tokenizer(rendered, return_tensors="pt")
-        device = getattr(self.model, "device", None)
-        if device is not None and hasattr(inputs, "to"):
-            inputs = inputs.to(device)
-        generation_inputs = dict(inputs) if isinstance(inputs, Mapping) else inputs
-        if not isinstance(generation_inputs, dict):
-            raise TypeError("Le tokenizer doit retourner un mapping compatible avec model.generate().")
-        outputs = self.model.generate(
-            **generation_inputs,
-            max_new_tokens=self.max_new_tokens,
-        )
-        input_ids = generation_inputs.get("input_ids")
-        prompt_length = self._sequence_length(input_ids)
-        generated_ids = outputs[0][prompt_length:] if prompt_length is not None else outputs[0]
-        decoded = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
-        return extract_json_object(decoded)
+        inputs = generation_inputs = outputs = generated_ids = input_ids = None
+        try:
+            inputs = self.tokenizer(rendered, return_tensors="pt")
+            device = getattr(self.model, "device", None)
+            if device is not None and hasattr(inputs, "to"):
+                inputs = inputs.to(device)
+            generation_inputs = dict(inputs) if isinstance(inputs, Mapping) else inputs
+            if not isinstance(generation_inputs, dict):
+                raise TypeError("Le tokenizer doit retourner un mapping compatible avec model.generate().")
+            outputs = self.model.generate(
+                **generation_inputs,
+                max_new_tokens=self.max_new_tokens,
+            )
+            input_ids = generation_inputs.get("input_ids")
+            prompt_length = self._sequence_length(input_ids)
+            generated_ids = outputs[0][prompt_length:] if prompt_length is not None else outputs[0]
+            decoded = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+            return extract_json_object(decoded)
+        finally:
+            # Release references between complete generation attempts. Cleanup is
+            # best-effort and must never hide the original generation/OOM error.
+            inputs = generation_inputs = outputs = generated_ids = input_ids = None
+            self._release_cuda_cache()
+
+    @staticmethod
+    def _release_cuda_cache() -> None:
+        """Release unused CUDA allocations between generation calls, if active."""
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
 
     @staticmethod
     def _sequence_length(input_ids: Any) -> int | None:
