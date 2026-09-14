@@ -50,6 +50,25 @@ def three_pool_workflow():
             "ambiguities": []}
 
 
+def three_pool_without_events():
+    workflow = {"schemaVersion": "2.0", "processes": [process()],
+                "participants": [participant(owner) for owner in ("participant_a", "participant_b", "participant_c")],
+                "lanes": [],
+                "nodes": [node("a_message", "participant_a", "messageTask"),
+                          node("b_receive", "participant_b", "messageTask"),
+                          node("b_work", "participant_b", "serviceTask"),
+                          node("b_send", "participant_b", "messageTask"),
+                          node("c_message", "participant_c", "messageTask")],
+                "flows": [flow("b_internal_1", "b_receive", "b_work"),
+                          flow("b_internal_2", "b_work", "b_send"),
+                          flow("a_to_b", "a_message", "b_receive"),
+                          flow("b_to_c", "b_send", "c_message"),
+                          flow("c_to_b", "c_message", "b_receive"),
+                          flow("b_to_a", "b_send", "a_message")],
+                "messageFlows": [], "ambiguities": []}
+    return workflow
+
+
 def test_real_qwen_shared_process_is_split_and_flows_are_reclassified():
     original = three_pool_workflow()
     fixed, report = CanonicalWorkflowPreparer.apply_safe_repairs(original)
@@ -157,6 +176,43 @@ def test_compiler_returns_post_safe_repair_normalized_workflow():
     assert fixed["nodes"][1]["properties"]["timer"]["value"] == "P3D"
     assert result["repair_report"] == []
     assert len(generator.prompts) == 1
+
+
+def test_compiler_stabilizes_split_processes_without_explicit_events():
+    generator = QueueGenerator(three_pool_without_events())
+    compiler = WorkflowCompiler(generator, SCHEMA_PATH)
+    compiler._bpmn_generator = XmlGenerator()
+    result = compiler.compile("generic A B C collaboration without explicit events")
+    fixed = result["normalized_workflow"]
+    node_by_id = {node["id"]: node for node in fixed["nodes"]}
+    assert result["success"]
+    assert len(fixed["processes"]) == 3
+    assert len({participant["processRef"] for participant in fixed["participants"]}) == 3
+    assert "messageTask" not in {node["type"] for node in fixed["nodes"]}
+    assert node_by_id["b_receive"]["type"] == "receiveTask"
+    assert node_by_id["b_send"]["type"] == "sendTask"
+    assert node_by_id["a_message"]["type"] == "serviceTask"
+    process_ids={process["id"] for process in fixed["processes"]}
+    assert process_ids == {node["processRef"] for node in fixed["nodes"] if node["type"] == "startEvent"}
+    assert process_ids == {node["processRef"] for node in fixed["nodes"] if node["type"] == "endEvent"}
+    assert all(node_by_id[item["source"]]["processRef"] == node_by_id[item["target"]]["processRef"] for item in fixed["flows"])
+    assert {(message["source"],message["target"]) for message in fixed["messageFlows"]} == {
+        ("a_message","b_receive"),("b_send","c_message"),("c_message","b_receive"),("b_send","a_message")
+    }
+    forbidden={"PROCESS_MISSING_START_EVENT","PROCESS_MISSING_END_EVENT","UNREACHABLE_NODE","NO_PATH_TO_END","DEAD_END_BRANCH"}
+    assert forbidden.isdisjoint({issue["code"] for issue in result["semantic_errors"]})
+    assert result["repair_report"] == []
+    assert len(generator.prompts) == 1
+
+
+def test_split_does_not_connect_a_truly_isolated_business_node():
+    workflow = three_pool_without_events()
+    workflow["nodes"].append(node("b_orphan", "participant_b", "serviceTask"))
+    prepared = CanonicalWorkflowPreparer(SCHEMA).prepare_and_validate(workflow)
+    fixed = prepared["workflow"]
+    assert "b_orphan" in {item["id"] for item in fixed["nodes"]}
+    assert not any(flow["source"] == "b_orphan" or flow["target"] == "b_orphan" for flow in fixed["flows"])
+    assert "ISOLATED_TASK" in {issue["code"] for issue in prepared["semantic_errors"]}
 
 
 def test_prompts_state_collaboration_and_targeted_repair_rules():

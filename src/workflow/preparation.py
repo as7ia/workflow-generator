@@ -38,7 +38,11 @@ class CanonicalWorkflowPreparer:
         numeric suffix if that ID already exists.
         """
         repaired=copy.deepcopy(workflow) if isinstance(workflow,Mapping) else {};report=[]
-        cls._normalize_timers(repaired,report);cls._split_shared_processes(repaired,report);cls._repair_flows(repaired,report)
+        split_processes=cls._split_shared_processes(repaired,report)
+        converted_sources,converted_targets=cls._repair_flows(repaired,report)
+        cls._normalize_message_tasks(repaired,report)
+        cls._normalize_timers(repaired,report)
+        cls._finalize_split_processes(repaired,split_processes,converted_sources,converted_targets,report)
         return repaired,report
 
     @classmethod
@@ -59,7 +63,7 @@ class CanonicalWorkflowPreparer:
     @classmethod
     def _split_shared_processes(cls,workflow,report):
         processes=workflow.get("processes",[]);participants=workflow.get("participants",[]);nodes=workflow.get("nodes",[]);lanes=workflow.get("lanes",[])
-        if not all(isinstance(x,list) for x in (processes,participants,nodes,lanes)):return
+        if not all(isinstance(x,list) for x in (processes,participants,nodes,lanes)):return set()
         process_by_id={p.get("id"):p for p in processes if isinstance(p,Mapping) and isinstance(p.get("id"),str)}
         counts=Counter(p.get("processRef") for p in participants if isinstance(p,Mapping) and isinstance(p.get("processRef"),str))
         used=set(process_by_id);replacements={}
@@ -81,11 +85,12 @@ class CanonicalWorkflowPreparer:
             report.append(cls._entry("SHARED_PROCESS_SPLIT_BY_PARTICIPANT",f"Shared process '{original_id}' split into one process per participant."))
         if replacements:
             workflow["processes"]=[clone for process in processes for clone in replacements.get(process.get("id") if isinstance(process,Mapping) else None,[process])]
+        return {clone["id"] for clones in replacements.values() for clone in clones}
 
     @classmethod
     def _repair_flows(cls,workflow,report):
         nodes=workflow.get("nodes",[]);flows=workflow.get("flows",[]);raw_messages=workflow.get("messageFlows",[])
-        if not isinstance(nodes,list) or not isinstance(flows,list):return
+        if not isinstance(nodes,list) or not isinstance(flows,list):return set(),set()
         messages=raw_messages if isinstance(raw_messages,list) else []
         node_by_id={n.get("id"):n for n in nodes if isinstance(n,Mapping) and isinstance(n.get("id"),str)}
         parallel_ids={i for i,n in node_by_id.items() if n.get("type")=="parallelGateway"}
@@ -98,7 +103,7 @@ class CanonicalWorkflowPreparer:
             pairs.add(pair);identifier=str(message.get("id") or "")
             if not identifier or identifier in used_ids:identifier=cls._unique_id("message_flow_1",used_ids);message["id"]=identifier
             used_ids.add(identifier);deduped.append(message)
-        retained=[]
+        retained=[];converted_sources=set();converted_targets=set()
         for raw in flows:
             if not isinstance(raw,Mapping):retained.append(raw);continue
             flow=dict(raw);source,target=flow.get("source"),flow.get("target");source_node,target_node=node_by_id.get(source),node_by_id.get(target)
@@ -108,6 +113,7 @@ class CanonicalWorkflowPreparer:
             if source_node is None or target_node is None:retained.append(flow);continue
             source_process,target_process=source_node.get("processRef"),target_node.get("processRef")
             if source_process==target_process:flow["processRef"]=source_process;retained.append(flow);continue
+            converted_sources.add(source);converted_targets.add(target)
             pair=(source,target)
             if pair not in pairs:
                 identifier=str(flow.get("id") or "")
@@ -122,6 +128,83 @@ class CanonicalWorkflowPreparer:
             source_node=node_by_id.get(message.get("source"));target_node=node_by_id.get(message.get("target"))
             if source_node and target_node and source_node.get("processRef")==target_node.get("processRef"):
                 report.append(cls._entry("MESSAGE_FLOW_WITHIN_SAME_PROCESS","Message flow remains inside one process.",flow_id=message.get("id")))
+        return converted_sources,converted_targets
+
+    @classmethod
+    def _normalize_message_tasks(cls,workflow,report):
+        nodes=workflow.get("nodes",[]);messages=workflow.get("messageFlows",[])
+        if not isinstance(nodes,list) or not isinstance(messages,list):return
+        sources={m.get("source") for m in messages if isinstance(m,Mapping)}
+        targets={m.get("target") for m in messages if isinstance(m,Mapping)}
+        for node in nodes:
+            if not isinstance(node,dict) or str(node.get("type","")).replace("_","").lower()!="messagetask":continue
+            node_id=node.get("id");is_source=node_id in sources;is_target=node_id in targets
+            if is_source and not is_target:
+                node["type"]="sendTask";code="MESSAGE_TASK_NORMALIZED_TO_SEND_TASK"
+            elif is_target and not is_source:
+                node["type"]="receiveTask";code="MESSAGE_TASK_NORMALIZED_TO_RECEIVE_TASK"
+            else:
+                node["type"]="serviceTask";code="AMBIGUOUS_MESSAGE_TASK_NORMALIZED"
+            report.append(cls._entry(code,f"messageTask '{node_id}' normalized to {node['type']}.",node_id=node_id))
+
+    @classmethod
+    def _finalize_split_processes(cls,workflow,split_processes,converted_sources,converted_targets,report):
+        if not split_processes:return
+        nodes=workflow.get("nodes",[]);flows=workflow.get("flows",[]);messages=workflow.get("messageFlows",[])
+        participants=workflow.get("participants",[])
+        if not isinstance(nodes,list) or not isinstance(flows,list) or not isinstance(messages,list):return
+        used_node_ids={n.get("id") for n in nodes if isinstance(n,Mapping)}
+        used_flow_ids={f.get("id") for f in flows if isinstance(f,Mapping)}
+        message_endpoints={endpoint for m in messages if isinstance(m,Mapping) for endpoint in (m.get("source"),m.get("target"))}
+        participant_by_process={p.get("processRef"):p.get("id") for p in participants if isinstance(p,Mapping)}
+
+        for process_id in sorted(split_processes):
+            local_nodes=[n for n in nodes if isinstance(n,dict) and n.get("processRef")==process_id]
+            if not local_nodes:continue
+            local_ids={n.get("id") for n in local_nodes}
+            local_flows=[f for f in flows if isinstance(f,Mapping) and f.get("source") in local_ids and f.get("target") in local_ids]
+            incoming={node_id:0 for node_id in local_ids};outgoing={node_id:0 for node_id in local_ids}
+            for flow in local_flows:
+                outgoing[flow.get("source")]+=1;incoming[flow.get("target")]+=1
+            isolated_message_ids={node_id for node_id in local_ids if node_id in message_endpoints and incoming[node_id]==0 and outgoing[node_id]==0}
+            starts=sorted((n for n in local_nodes if n.get("type")=="startEvent"),key=lambda n:str(n.get("id")))
+            ends=sorted((n for n in local_nodes if n.get("type")=="endEvent"),key=lambda n:str(n.get("id")))
+
+            if not starts:
+                start_id=cls._unique_id(f"start_{process_id}",used_node_ids);used_node_ids.add(start_id)
+                start=cls._technical_event(start_id,"startEvent",process_id,participant_by_process.get(process_id));nodes.append(start);starts=[start]
+                roots=[n for n in local_nodes if incoming.get(n.get("id"),0)==0 and
+                       (outgoing.get(n.get("id"),0)>0 or n.get("id") in message_endpoints)]
+            else:
+                roots=[n for n in local_nodes if n.get("type")!="startEvent" and incoming.get(n.get("id"),0)==0 and
+                       (n.get("id") in converted_targets or n.get("id") in isolated_message_ids)]
+            for root in roots:
+                cls._add_technical_flow(flows,used_flow_ids,starts[0]["id"],root["id"],process_id,report,"START_FLOW_ADDED")
+                incoming[root["id"]]=incoming.get(root["id"],0)+1
+
+            if not ends:
+                end_id=cls._unique_id(f"end_{process_id}",used_node_ids);used_node_ids.add(end_id)
+                end=cls._technical_event(end_id,"endEvent",process_id,participant_by_process.get(process_id));nodes.append(end);ends=[end]
+                sinks=[n for n in local_nodes if outgoing.get(n.get("id"),0)==0 and
+                       (incoming.get(n.get("id"),0)>0 or n.get("id") in message_endpoints)]
+                if not roots and len(local_nodes)==1 and local_nodes[0].get("type")=="startEvent":sinks=local_nodes
+            else:
+                sinks=[n for n in local_nodes if n.get("type")!="endEvent" and outgoing.get(n.get("id"),0)==0 and
+                       (n.get("id") in converted_sources or n.get("id") in isolated_message_ids)]
+            for sink in sinks:
+                cls._add_technical_flow(flows,used_flow_ids,sink["id"],ends[0]["id"],process_id,report,"END_FLOW_ADDED")
+
+    @staticmethod
+    def _technical_event(identifier,node_type,process_id,participant_id):
+        return {"id":identifier,"type":node_type,"name":identifier,"processRef":process_id,
+                "participantRef":participant_id,"laneRef":None,"actor":None,"properties":{}}
+
+    @classmethod
+    def _add_technical_flow(cls,flows,used_ids,source,target,process_id,report,code):
+        identifier=cls._unique_id(f"flow_{source}_{target}",used_ids);used_ids.add(identifier)
+        flows.append({"id":identifier,"source":source,"target":target,"processRef":process_id,
+                      "condition":None,"isDefault":False,"properties":{}})
+        report.append(cls._entry(code,f"Technical sequence flow '{identifier}' added.",flow_id=identifier))
 
     @staticmethod
     def _unique_id(base,used):
