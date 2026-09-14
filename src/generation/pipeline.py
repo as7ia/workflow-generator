@@ -16,6 +16,8 @@ try:
         WorkflowGraphAnalyzer,
         WorkflowNormalizer,
         WorkflowRepairer,
+        CoverageValidator,
+        normalize_semantic_requirements,
     )
     from ..workflow.repair import _StandardSchemaValidator
 except ImportError:  # pragma: no cover - supports PYTHONPATH=src notebooks.
@@ -26,10 +28,12 @@ except ImportError:  # pragma: no cover - supports PYTHONPATH=src notebooks.
         WorkflowGraphAnalyzer,
         WorkflowNormalizer,
         WorkflowRepairer,
+        CoverageValidator,
+        normalize_semantic_requirements,
     )
     from workflow.repair import _StandardSchemaValidator
 
-from .prompts import build_generation_prompt
+from .prompts import build_generation_prompt, build_semantic_requirements_prompt
 
 
 CompilationResult = dict[str, Any]
@@ -64,6 +68,14 @@ class WorkflowCompiler:
             return self._fail(result, "schema_validation", exc)
 
         try:
+            extracted=self.generator.generate_json(build_semantic_requirements_prompt(description))
+            requirements,requirement_issues=normalize_semantic_requirements(extracted)
+            result["semantic_requirements"]=requirements
+            if requirement_issues:return self._fail(result,"requirements_extraction",requirement_issues[0]["message"])
+        except Exception as exc:
+            return self._fail(result,"requirements_extraction",exc)
+
+        try:
             prompt = build_generation_prompt(description, schema)
             generate_json = getattr(self.generator, "generate_json", None)
             if not callable(generate_json):
@@ -93,7 +105,8 @@ class WorkflowCompiler:
         semantic_errors = prepared["semantic_errors"]
         result["schema_errors"] = schema_errors
         result["semantic_errors"] = semantic_errors
-        blocking = self._blocking_errors(schema_errors, semantic_errors)
+        result["coverage_errors"]=CoverageValidator().validate(requirements,normalized)
+        blocking = self._blocking_errors(schema_errors, semantic_errors,result["coverage_errors"])
 
         if blocking:
             try:
@@ -105,6 +118,8 @@ class WorkflowCompiler:
                     workflow=current_workflow,
                     errors=blocking,
                     generator=self.generator,
+                    description=description,
+                    requirements=requirements,
                 )
                 prepared = preparer.prepare_and_validate(repaired_workflow)
                 normalized = prepared["workflow"]
@@ -118,8 +133,9 @@ class WorkflowCompiler:
                 result["repair_report"] = repair_report
                 result["schema_errors"] = prepared["schema_errors"]
                 result["semantic_errors"] = prepared["semantic_errors"]
+                result["coverage_errors"]=CoverageValidator().validate(requirements,normalized)
                 blocking = self._blocking_errors(
-                    result["schema_errors"], result["semantic_errors"]
+                    result["schema_errors"], result["semantic_errors"],result["coverage_errors"]
                 )
             except Exception as exc:
                 return self._fail(result, "repair", exc)
@@ -144,7 +160,7 @@ class WorkflowCompiler:
 
         result["warnings"].extend(
             issue
-            for issue in result["semantic_errors"]
+            for issue in [*result["semantic_errors"],*result["coverage_errors"]]
             if issue.get("severity") == "warning"
         )
         result["warnings"].extend(result["analysis"].get("warnings", []))
@@ -205,6 +221,8 @@ class WorkflowCompiler:
             "normalized_workflow": {},
             "schema_errors": [],
             "semantic_errors": [],
+            "semantic_requirements": {},
+            "coverage_errors": [],
             "repair_report": [],
             "analysis": {},
             "layout": {},

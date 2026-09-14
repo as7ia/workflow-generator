@@ -134,6 +134,8 @@ class QueueGenerator:
         self.prompts = []
 
     def generate_json(self, prompt):
+        if prompt.startswith("SEMANTIC_REQUIREMENTS_EXTRACTION"):
+            return {key: [] for key in ("participants","lanes","timers","parallelisms","decisions","interactions","activities","ambiguities")}
         self.prompts.append(prompt)
         return copy.deepcopy(self.workflow)
 

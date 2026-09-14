@@ -5,7 +5,9 @@ from src.generation.pipeline import WorkflowCompiler
 SCHEMA=Path(__file__).parents[1]/"schemas"/"workflow.schema.json"
 class Generator:
     def __init__(self,*items):self.items=list(items);self.prompts=[]
-    def generate_json(self,prompt):self.prompts.append(prompt);return copy.deepcopy(self.items.pop(0))
+    def generate_json(self,prompt):
+        if prompt.startswith("SEMANTIC_REQUIREMENTS_EXTRACTION"):return {k:[] for k in ("participants","lanes","timers","parallelisms","decisions","interactions","activities","ambiguities")}
+        self.prompts.append(prompt);return copy.deepcopy(self.items.pop(0))
 class Xml:
     def generate(self,workflow,layout):return "<definitions/>"
 def n(i,p="p1",t="serviceTask",participant=None,lane=None,actor=None,properties=None):
@@ -66,3 +68,24 @@ def test_original_not_mutated():
     w=v1();before=copy.deepcopy(w);compiler(w).compile("x");assert w==before
 def test_message_metadata_is_dictionary():
     nodes=[n("a","p1","startEvent"),n("ae","p1","endEvent"),n("b","p2","startEvent"),n("be","p2","endEvent")];flows=[f("1","a","ae","p1"),f("2","b","be","p2")];msg={"id":"m","source":"a","target":"b","properties":{}};result=compiler(v2(("p1","p2"),nodes,flows,messages=[msg])).compile("x");assert result["layout"]["metadata"]["message_flow_connections"]["m"]["source_process"]=="p1"
+
+class CoverageGenerator(Generator):
+    def __init__(self,requirements,*items):super().__init__(*items);self.requirements=requirements
+    def generate_json(self,prompt):
+        if prompt.startswith("SEMANTIC_REQUIREMENTS_EXTRACTION"):return copy.deepcopy(self.requirements)
+        return super().generate_json(prompt)
+
+def empty_requirements(**values):
+    result={k:[] for k in ("participants","lanes","timers","parallelisms","decisions","interactions","activities","ambiguities")};result.update(values);return result
+
+def test_coverage_error_is_repaired_with_description_and_requirements():
+    missing=v2();covered=v2(nodes=[n("s",t="startEvent"),n("t",t="intermediateCatchEvent",properties={"timer":{"kind":"duration","value":"P2D"}}),n("e",t="endEvent")])
+    g=CoverageGenerator(empty_requirements(timers=[{"duration":"P2D"}]),missing,covered);c=WorkflowCompiler(g,SCHEMA);c._bpmn_generator=Xml()
+    result=c.compile("wait two days")
+    assert result["success"] and result["coverage_errors"]==[] and result["semantic_requirements"]["timers"]==[{"duration":"P2D"}]
+    assert len(g.prompts)==2 and "wait two days" in g.prompts[1] and "P2D" in g.prompts[1]
+
+def test_coverage_warnings_do_not_block_compilation():
+    g=CoverageGenerator(empty_requirements(ambiguities=[{"message":"unclear optional role"}]),v2());c=WorkflowCompiler(g,SCHEMA);c._bpmn_generator=Xml()
+    result=c.compile("valid but ambiguous")
+    assert result["success"] and any(x["code"]=="SEMANTIC_AMBIGUITY" for x in result["coverage_errors"]) and len(g.prompts)==1

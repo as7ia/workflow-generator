@@ -17,6 +17,7 @@ from typing import Any, Protocol
 from .normalizer import WorkflowNormalizer
 from .semantic_validator import SemanticValidator
 from .preparation import CanonicalWorkflowPreparer
+from .coverage_validator import CoverageValidator
 
 
 RepairError = dict[str, Any]
@@ -50,6 +51,8 @@ class WorkflowRepairer:
         workflow: dict[str, Any],
         errors: list[dict[str, Any]],
         generator: WorkflowGeneratorProtocol,
+        description: str | None = None,
+        requirements: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], list[RepairAttempt]]:
         """Return the best repaired workflow and a report for every attempt.
 
@@ -61,7 +64,7 @@ class WorkflowRepairer:
         original = copy.deepcopy(workflow) if isinstance(workflow, Mapping) else {}
         prepared = self._preparer.prepare_and_validate(original)
         current = prepared["workflow"]
-        current_errors = prepared["errors"]
+        current_errors = [*prepared["errors"],*CoverageValidator().validate(requirements or {},current)]
         report: list[RepairAttempt] = []
 
         if self._is_valid(current_errors):
@@ -74,7 +77,7 @@ class WorkflowRepairer:
 
         for attempt in range(1, self.max_attempts + 1):
             input_errors = copy.deepcopy(prompt_errors)
-            prompt = self.build_repair_prompt(current, input_errors)
+            prompt = self.build_repair_prompt(current, input_errors,description,requirements)
             try:
                 generated = generator.generate_json(prompt)
             except Exception as exc:  # Generator implementations are external.
@@ -112,7 +115,7 @@ class WorkflowRepairer:
 
             prepared = self._preparer.prepare_and_validate(copy.deepcopy(dict(generated)))
             candidate = prepared["workflow"]
-            output_errors = prepared["errors"]
+            output_errors = [*prepared["errors"],*CoverageValidator().validate(requirements or {},candidate)]
             candidate_score = self._score(output_errors)
             if candidate_score < best_score:
                 best = copy.deepcopy(candidate)
@@ -146,14 +149,15 @@ class WorkflowRepairer:
         return best, report
 
     def build_repair_prompt(
-        self, workflow: dict[str, Any], errors: list[dict[str, Any]]
+        self, workflow: dict[str, Any], errors: list[dict[str, Any]], description: str | None = None,
+        requirements: dict[str, Any] | None = None,
     ) -> str:
         """Build a strict JSON-only repair prompt containing structured errors."""
         try:
             from ..generation.prompts import build_repair_prompt
         except ImportError:  # pragma: no cover - PYTHONPATH=src entry point.
             from generation.prompts import build_repair_prompt
-        return build_repair_prompt(workflow, errors, self._schema)
+        return build_repair_prompt(workflow, errors, self._schema, description, requirements)
         """Previous prompt implementation retained below temporarily unreachable."""
         error_lines = []
         for error in errors if isinstance(errors, list) else []:

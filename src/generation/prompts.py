@@ -3,6 +3,13 @@ from __future__ import annotations
 import json
 from typing import Any
 
+def build_semantic_requirements_prompt(description:str)->str:
+    return ("SEMANTIC_REQUIREMENTS_EXTRACTION\nExtract only business requirements, not a BPMN workflow.\n"
+        "Return JSON with exactly these arrays: participants, lanes, timers, parallelisms, decisions, interactions, activities, ambiguities.\n"
+        "Timers use ISO 8601 duration; interactions use source and target; parallelisms may list activities.\n"
+        "Recognize concurrency, delays, actors, internal roles, conditions, communications and required activities.\n"
+        f"Description:\n{description}\nReturn JSON only.")
+
 _V2_RULES = """Contrat obligatoire :
 - schemaVersion vaut exactement "2.0".
 - Utilise processes[], participants[], lanes[], nodes[], flows[], messageFlows[] et ambiguities[].
@@ -41,9 +48,10 @@ def build_generation_prompt(description:str,schema:dict[str,Any])->str:
         f"Description métier:\n{description}\n\nJSON Schema officiel:\n{json.dumps(schema,ensure_ascii=False,indent=2,sort_keys=True)}\n\n"
         f"{_V2_RULES}\nConserve strictement l'intention métier. Retourne uniquement un objet JSON valide, sans Markdown ni explication.")
 
-def build_repair_prompt(workflow:dict[str,Any],errors:list[dict[str,Any]],schema:dict[str,Any])->str:
+def build_repair_prompt(workflow:dict[str,Any],errors:list[dict[str,Any]],schema:dict[str,Any],description:str|None=None,requirements:dict[str,Any]|None=None)->str:
     lines=[f"- [{e.get('code','ERROR')}] {e.get('message','Erreur non décrite')}" for e in errors if isinstance(e,dict)] or ["- Validation échouée"]
-    return ("Corrige le workflow JSON canonique v2 sans altérer son intention métier.\n\nErreurs:\n"
+    context=(f"Description originale:\n{description}\n\nExigences sémantiques:\n{json.dumps(requirements,ensure_ascii=False,indent=2)}\n\n" if description is not None and requirements is not None else "")
+    return ("Corrige uniquement les informations manquantes du workflow JSON canonique v2 sans le reconstruire inutilement.\n\n"+context+"Erreurs:\n"
         +"\n".join(lines)+f"\n\nWorkflow:\n{json.dumps(workflow,ensure_ascii=False,indent=2,sort_keys=True)}"
         f"\n\nJSON Schema officiel:\n{json.dumps(schema,ensure_ascii=False,indent=2,sort_keys=True)}\n\n{_V2_RULES}\n"
         "Pour MULTIPLE_PARTICIPANTS_FOR_PROCESS: Create one distinct process per participant and update participant.processRef, node.processRef, lane.processRef and flow.processRef consistently.\n"

@@ -5,6 +5,8 @@ from .normalizer import WorkflowNormalizer
 from .preparation import CanonicalWorkflowPreparer
 from .repair import WorkflowRepairer
 from .semantic_validator import SemanticValidator
+from .semantic_requirements import SemanticRequirements, normalize_semantic_requirements
+from .coverage_validator import CoverageValidator
 
 __all__ = [
     "SemanticValidator",
@@ -12,4 +14,7 @@ __all__ = [
     "WorkflowRepairer",
     "WorkflowGraphAnalyzer",
     "CanonicalWorkflowPreparer",
+    "SemanticRequirements",
+    "normalize_semantic_requirements",
+    "CoverageValidator",
 ]
