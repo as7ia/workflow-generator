@@ -215,6 +215,40 @@ def test_split_does_not_connect_a_truly_isolated_business_node():
     assert "ISOLATED_TASK" in {issue["code"] for issue in prepared["semantic_errors"]}
 
 
+def test_compiler_inserts_isolated_timer_at_unique_business_flow():
+    workflow = {"schemaVersion":"2.0","processes":[process("documents")],"participants":[],"lanes":[],
+                "nodes":[
+                    {**node("start",None,"startEvent"),"processRef":"documents"},
+                    {**node("request_documents",None,"serviceTask"),"name":"Demande de documents","processRef":"documents"},
+                    {**node("node_attente_documents",None,"intermediateCatchEvent"),"name":"Attente documents","processRef":"documents","properties":{"timer":{"kind":"duration","value":"P3D"}}},
+                    {**node("resume_documents",None,"serviceTask"),"name":"Reprise après documents","processRef":"documents"},
+                    {**node("end",None,"endEvent"),"processRef":"documents"}],
+                "flows":[
+                    {**flow("to_request","start","request_documents"),"processRef":"documents"},
+                    {**flow("wait_for_documents","request_documents","resume_documents"),"name":"Attente documents","processRef":"documents"},
+                    {**flow("to_end","resume_documents","end"),"processRef":"documents"}],
+                "messageFlows":[],"ambiguities":[]}
+    generator=QueueGenerator(workflow);compiler=WorkflowCompiler(generator,SCHEMA_PATH);compiler._bpmn_generator=XmlGenerator()
+    result=compiler.compile("wait for requested documents")
+    fixed=result["normalized_workflow"];timer_id="node_attente_documents"
+    assert result["success"]
+    assert ("request_documents",timer_id) in {(item["source"],item["target"]) for item in fixed["flows"]}
+    assert (timer_id,"resume_documents") in {(item["source"],item["target"]) for item in fixed["flows"]}
+    codes={issue["code"] for issue in result["semantic_errors"]}
+    assert {"MISSING_INCOMING_FLOW","MISSING_OUTGOING_FLOW","UNREACHABLE_NODE"}.isdisjoint(codes)
+    assert result["repair_report"]==[] and len(generator.prompts)==1 and result["bpmn_xml"]=="<definitions/>"
+
+
+def test_isolated_timer_is_not_inserted_when_two_flows_match():
+    workflow=three_pool_workflow()
+    workflow["nodes"].append({**node("ambiguous_timer","participant_b","intermediateCatchEvent"),
+                              "name":"Attente documents","properties":{"timer":{"kind":"duration","value":"P3D"}}})
+    matching=[item for item in workflow["flows"] if item["id"] in {"b_local_1","b_local_2"}]
+    for item in matching:item["name"]="Attente documents"
+    fixed,_=CanonicalWorkflowPreparer.apply_safe_repairs(workflow)
+    assert not any("ambiguous_timer" in (item.get("source"),item.get("target")) for item in fixed["flows"])
+
+
 def test_prompts_state_collaboration_and_targeted_repair_rules():
     from src.generation.prompts import build_generation_prompt, build_repair_prompt
 

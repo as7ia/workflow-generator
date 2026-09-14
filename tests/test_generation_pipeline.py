@@ -59,7 +59,7 @@ def test_analysis_v2_returned():
 def test_layout_v2_returned():
     result=compiler(v2()).compile("x");assert "p1" in result["layout"]["processes"] and "s" in result["layout"]["nodes"]
 def test_loop_warning_preserved():
-    w=v2(nodes=[n("s",t="startEvent"),n("a"),n("e",t="endEvent")],flows=[f("1","s","a"),f("2","a","a"),f("3","a","e")]);result=compiler(w).compile("x");assert any(e["severity"]=="warning" for e in result["warnings"])
+    w=v2(nodes=[n("s",t="startEvent"),n("a"),n("e",t="endEvent")],flows=[f("1","s","a"),f("2","a","a"),f("3","a","e")]);c=compiler(w);result=c.compile("x");assert any(e["severity"]=="warning" for e in result["warnings"]) and len(c.generator.prompts)==1
 def test_timer_v2_compiles():
     w=v2(nodes=[n("s",t="startEvent"),n("timer",t="intermediateCatchEvent",properties={"timer":{"kind":"duration","value":"PT5M"}}),n("e",t="endEvent")],flows=[f("1","s","timer"),f("2","timer","e")]);assert compiler(w).compile("x")["success"]
 def test_original_not_mutated():

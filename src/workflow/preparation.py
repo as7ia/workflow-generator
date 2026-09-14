@@ -2,6 +2,7 @@
 from __future__ import annotations
 import copy
 import re
+import unicodedata
 from collections import Counter
 from collections.abc import Mapping
 from typing import Any
@@ -42,6 +43,7 @@ class CanonicalWorkflowPreparer:
         converted_sources,converted_targets=cls._repair_flows(repaired,report)
         cls._normalize_message_tasks(repaired,report)
         cls._normalize_timers(repaired,report)
+        cls._insert_unambiguous_isolated_timers(repaired,report)
         cls._finalize_split_processes(repaired,split_processes,converted_sources,converted_targets,report)
         return repaired,report
 
@@ -59,6 +61,45 @@ class CanonicalWorkflowPreparer:
             normalized=f"P{amount}D" if unit.startswith("day") else f"PT{amount}{'H' if unit.startswith('hour') else 'M'}"
             timer["value"]=normalized
             report.append(cls._entry("TIMER_DURATION_NORMALIZED",f"Timer duration '{value}' normalized to '{normalized}'.",node_id=node.get("id")))
+
+    @classmethod
+    def _insert_unambiguous_isolated_timers(cls,workflow,report):
+        """Insert an isolated timer only into one uniquely matching local flow."""
+        nodes=workflow.get("nodes",[]);flows=workflow.get("flows",[])
+        if not isinstance(nodes,list) or not isinstance(flows,list):return
+        node_by_id={n.get("id"):n for n in nodes if isinstance(n,Mapping) and isinstance(n.get("id"),str)}
+        used_flow_ids={f.get("id") for f in flows if isinstance(f,Mapping)}
+        for timer in nodes:
+            if not isinstance(timer,Mapping) or timer.get("type")!="intermediateCatchEvent":continue
+            properties=timer.get("properties");definition=properties.get("timer") if isinstance(properties,Mapping) else None
+            if not isinstance(definition,Mapping):continue
+            timer_id=timer.get("id");process_id=timer.get("processRef")
+            if any(isinstance(f,Mapping) and timer_id in (f.get("source"),f.get("target")) for f in flows):continue
+            timer_tokens=cls._semantic_tokens(timer.get("name"),timer_id)
+            if not timer_tokens:continue
+            named=[];inferred=[]
+            for flow in flows:
+                if not isinstance(flow,dict) or flow.get("processRef")!=process_id:continue
+                source=node_by_id.get(flow.get("source"));target=node_by_id.get(flow.get("target"))
+                if source is None or target is None:continue
+                flow_tokens=cls._semantic_tokens(flow.get("name"))
+                endpoint_tokens=cls._semantic_tokens(source.get("name"),source.get("id"),target.get("name"),target.get("id"))
+                if timer_tokens & flow_tokens:named.append(flow)
+                elif not flow_tokens and timer_tokens & endpoint_tokens:inferred.append(flow)
+            local=named if named else inferred
+            if len(local)!=1:continue
+            direct=local[0];successor=direct["target"];direct["target"]=timer_id
+            after_id=cls._unique_id(f"{direct.get('id')}_after_timer",used_flow_ids);used_flow_ids.add(after_id)
+            flows.append({"id":after_id,"source":timer_id,"target":successor,"processRef":process_id,
+                          "condition":None,"isDefault":False,"properties":{}})
+            report.append(cls._entry("ISOLATED_TIMER_INSERTED","Isolated timer inserted into its unique matching sequence flow.",node_id=timer_id))
+
+    @staticmethod
+    def _semantic_tokens(*values):
+        ignored={"node","timer","attente","attendre","waiting","wait","delay","event","flow","pour","apres","avant","the","and"}
+        text=" ".join(str(value or "") for value in values)
+        text=unicodedata.normalize("NFKD",text).encode("ascii","ignore").decode("ascii").lower()
+        return {token for token in re.findall(r"[a-z0-9]+",text) if len(token)>=4 and token not in ignored and not token.isdigit()}
 
     @classmethod
     def _split_shared_processes(cls,workflow,report):
