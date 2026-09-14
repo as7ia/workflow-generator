@@ -135,12 +135,28 @@ def test_three_pool_pipeline_needs_no_qwen_repair_attempt():
 
 
 def test_compiler_returns_post_safe_repair_normalized_workflow():
-    generator = QueueGenerator(three_pool_workflow())
+    workflow = three_pool_workflow()
+    workflow["nodes"][1]["type"] = "intermediateCatchEvent"
+    workflow["nodes"][1]["properties"] = {"timer": {"kind": "duration", "value": "3 days"}}
+    generator = QueueGenerator(workflow)
     compiler = WorkflowCompiler(generator, SCHEMA_PATH)
     compiler._bpmn_generator = XmlGenerator()
     result = compiler.compile("real qwen-shaped collaboration")
-    assert len(result["normalized_workflow"]["processes"]) == 3
-    assert len({participant["processRef"] for participant in result["normalized_workflow"]["participants"]}) == 3
+    fixed = result["normalized_workflow"]
+    participant_by_id = {participant["id"]: participant for participant in fixed["participants"]}
+    node_by_id = {node["id"]: node for node in fixed["nodes"]}
+    assert result["success"]
+    assert len(fixed["processes"]) == 3
+    assert len({participant["processRef"] for participant in fixed["participants"]}) == 3
+    assert all(node["processRef"] == participant_by_id[node["participantRef"]]["processRef"] for node in fixed["nodes"])
+    assert all(lane["processRef"] == participant_by_id[lane["participantRef"]]["processRef"] for lane in fixed["lanes"])
+    assert all(node_by_id[flow["source"]]["processRef"] == node_by_id[flow["target"]]["processRef"] for flow in fixed["flows"])
+    assert {("a_task", "b_task"), ("b_task", "c_task"), ("c_task", "b_task"), ("b_task", "a_task")} == {
+        (message["source"], message["target"]) for message in fixed["messageFlows"]
+    }
+    assert fixed["nodes"][1]["properties"]["timer"]["value"] == "P3D"
+    assert result["repair_report"] == []
+    assert len(generator.prompts) == 1
 
 
 def test_prompts_state_collaboration_and_targeted_repair_rules():
