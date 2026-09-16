@@ -92,8 +92,9 @@ class WorkflowCompiler:
         preparer = CanonicalWorkflowPreparer(schema)
         try:
             prepared = preparer.prepare_and_validate(dict(raw))
-            normalized = prepared["workflow"]
-            result["normalized_workflow"] = normalized
+            current_workflow = copy.deepcopy(prepared["workflow"])
+            result["normalized_workflow"] = copy.deepcopy(current_workflow)
+            result["pipeline_debug"]["after_initial_prepare"] = self._workflow_counts(current_workflow)
             result["warnings"].extend(
                 entry for entry in prepared["normalization_report"] if entry.get("severity") == "warning"
             )
@@ -110,7 +111,6 @@ class WorkflowCompiler:
 
         if blocking:
             try:
-                current_workflow = copy.deepcopy(normalized)
                 repairer = WorkflowRepairer(
                     max_attempts=self.max_repair_attempts, schema=schema
                 )
@@ -120,8 +120,7 @@ class WorkflowCompiler:
                     generator=self.generator,
                 )
                 prepared = preparer.prepare_and_validate(repaired_workflow)
-                normalized = prepared["workflow"]
-                result["normalized_workflow"] = normalized
+                accepted_workflow = copy.deepcopy(prepared["workflow"])
                 result["warnings"].extend(
                     entry
                     for entry in prepared["normalization_report"]
@@ -134,6 +133,10 @@ class WorkflowCompiler:
                 blocking = self._blocking_errors(
                     result["schema_errors"], result["semantic_errors"]
                 )
+                if not blocking:
+                    current_workflow = accepted_workflow
+                    result["normalized_workflow"] = copy.deepcopy(current_workflow)
+                    result["pipeline_debug"]["after_structural_repair"] = self._workflow_counts(current_workflow)
             except Exception as exc:
                 return self._fail(result, "repair", exc)
             if blocking:
@@ -143,33 +146,61 @@ class WorkflowCompiler:
                 }
                 return result
 
-        result["coverage_errors"]=CoverageValidator().validate(requirements,normalized)
+        result["pipeline_debug"]["after_structural_repair"] = self._workflow_counts(current_workflow)
+        result["pipeline_debug"]["before_coverage_validation"] = self._workflow_counts(current_workflow)
+        result["coverage_errors"]=CoverageValidator().validate(requirements,current_workflow)
         blocking=self._blocking_errors(result["coverage_errors"])
         if blocking:
             try:
+                base_workflow=copy.deepcopy(current_workflow)
                 required_coverage=self._requirements_for_errors(requirements,blocking)
                 repairer=WorkflowRepairer(max_attempts=self.max_repair_attempts,schema=schema)
-                repaired_workflow,coverage_report=repairer.repair(
-                    workflow=copy.deepcopy(normalized),errors=blocking,generator=self.generator,
+                coverage_candidate,coverage_report=repairer.repair(
+                    workflow=copy.deepcopy(base_workflow),errors=blocking,generator=self.generator,
                     requirements=required_coverage,repair_kind="coverage")
-                prepared=preparer.prepare_and_validate(repaired_workflow);normalized=prepared["workflow"]
-                result["normalized_workflow"]=normalized;result["repair_report"].extend(coverage_report)
+                candidate_prepared=preparer.prepare_and_validate(coverage_candidate)
+                candidate_workflow=candidate_prepared["workflow"]
+                attempted_counts=next((
+                    attempt.get("coverage_repair",{}).get("candidate_counts")
+                    for attempt in reversed(coverage_report)
+                    if attempt.get("coverage_repair",{}).get("candidate_counts") is not None
+                ),None)
+                result["pipeline_debug"]["coverage_candidate"]=attempted_counts or self._workflow_counts(candidate_workflow)
+                result["repair_report"].extend(coverage_report)
+                candidate_accepted=any(
+                    attempt.get("coverage_repair",{}).get("accepted_candidate") is True
+                    for attempt in coverage_report
+                )
+                candidate_schema_errors=self._blocking_errors(candidate_prepared["schema_errors"])
+                if (candidate_accepted and not candidate_schema_errors and
+                        not self.is_catastrophic_regression(base_workflow,candidate_workflow,candidate_prepared["errors"])):
+                    current_workflow=copy.deepcopy(candidate_workflow)
+                else:
+                    current_workflow=base_workflow
+                prepared=preparer.prepare_and_validate(current_workflow)
+                current_workflow=copy.deepcopy(prepared["workflow"])
+                result["normalized_workflow"]=copy.deepcopy(current_workflow)
                 result["schema_errors"]=prepared["schema_errors"];result["semantic_errors"]=prepared["semantic_errors"]
-                result["coverage_errors"]=CoverageValidator().validate(requirements,normalized)
+                result["coverage_errors"]=CoverageValidator().validate(requirements,current_workflow)
                 blocking=self._blocking_errors(result["schema_errors"],result["semantic_errors"],result["coverage_errors"])
-            except Exception as exc:return self._fail(result,"coverage_repair",exc)
+            except Exception as exc:
+                result["normalized_workflow"]=copy.deepcopy(current_workflow)
+                result["pipeline_debug"]["final_current_workflow"]=self._workflow_counts(current_workflow)
+                return self._fail(result,"coverage_repair",exc)
             if blocking:
+                result["normalized_workflow"]=copy.deepcopy(current_workflow)
+                result["pipeline_debug"]["final_current_workflow"]=self._workflow_counts(current_workflow)
                 result["error"]={"stage":"coverage_repair","message":"Le workflow ne couvre pas encore toutes les exigences."}
                 return result
 
         try:
-            result["analysis"] = self._analyzer.analyze(normalized)
+            result["analysis"] = self._analyzer.analyze(current_workflow)
         except Exception as exc:
             return self._fail(result, "analysis", exc)
 
         try:
             result["layout"] = self._layout_engine.layout(
-                normalized, result["analysis"]
+                current_workflow, result["analysis"]
             )
         except Exception as exc:
             return self._fail(result, "layout", exc)
@@ -185,13 +216,15 @@ class WorkflowCompiler:
         )
 
         try:
-            bpmn_xml = self._bpmn_generator.generate(normalized, result["layout"])
+            bpmn_xml = self._bpmn_generator.generate(current_workflow, result["layout"])
             if not isinstance(bpmn_xml, str) or not bpmn_xml.strip():
                 raise ValueError("Le générateur BPMN a retourné un document vide.")
             result["bpmn_xml"] = bpmn_xml
         except Exception as exc:
             return self._fail(result, "bpmn", exc)
 
+        result["normalized_workflow"] = copy.deepcopy(current_workflow)
+        result["pipeline_debug"]["final_current_workflow"] = self._workflow_counts(current_workflow)
         result["success"] = True
         return result
 
@@ -245,7 +278,35 @@ class WorkflowCompiler:
             "bpmn_xml": None,
             "warnings": [],
             "error": None,
+            "pipeline_debug": {
+                "after_initial_prepare": None,
+                "after_structural_repair": None,
+                "before_coverage_validation": None,
+                "coverage_candidate": None,
+                "final_current_workflow": None,
+            },
         }
+
+    @staticmethod
+    def _workflow_counts(workflow: Mapping[str, Any]) -> dict[str, int]:
+        return {
+            key: len(workflow.get(key, [])) if isinstance(workflow.get(key), list) else 0
+            for key in ("processes", "participants", "lanes", "nodes", "flows", "messageFlows")
+        }
+
+    @classmethod
+    def is_catastrophic_regression(
+        cls, before: Mapping[str, Any], candidate: Mapping[str, Any],
+        candidate_errors: list[dict[str, Any]] | None = None,
+    ) -> bool:
+        before_counts=cls._workflow_counts(before);candidate_counts=cls._workflow_counts(candidate)
+        if before_counts["nodes"] and not candidate_counts["nodes"]:return True
+        if before_counts["participants"] and not candidate_counts["participants"]:return True
+        if before_counts["processes"]>1 and candidate_counts["processes"]<=1:return True
+        codes=[str(error.get("code","")) for error in candidate_errors or [] if error.get("severity","error")=="error"]
+        if "JSON_SCHEMA_ERROR" in codes:return True
+        unknown_codes={"UNKNOWN_NODE_PROCESS","UNKNOWN_MESSAGE_FLOW_SOURCE","UNKNOWN_MESSAGE_FLOW_TARGET"}
+        return sum(code in unknown_codes for code in codes)>=3
 
     @staticmethod
     def _validate_schema(

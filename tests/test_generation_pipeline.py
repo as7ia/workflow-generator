@@ -100,3 +100,35 @@ def test_structural_repair_precedes_coverage_repair():
     assert result["success"] and len(g.prompts)==3
     assert "PROCESS_MISSING_END_EVENT" in g.prompts[1] and "Exigences sémantiques" not in g.prompts[1]
     assert "MISSING_TIMER" in g.prompts[2] and "P2D" in g.prompts[2]
+
+def test_rejected_coverage_candidate_does_not_replace_structural_success():
+    broken=v2(nodes=[n("s",t="startEvent"),n("task")],flows=[f("f","s","task")])
+    processes=("client_process","company_process","bank_process")
+    participant_names=("Client","Entreprise","Banque")
+    participants=[];nodes=[];flows=[]
+    for process,name in zip(processes,participant_names):
+        participant=f"participant_{process}"
+        participants.append({"id":participant,"name":name,"processRef":process,"properties":{}})
+        local=[]
+        for index,node_type in enumerate(("startEvent","serviceTask","serviceTask","endEvent")):
+            node_id=f"{process}_{index}";local.append(node_id)
+            nodes.append(n(node_id,process,node_type,participant))
+        flows.extend(f(f"{process}_f{index}",source,target,process) for index,(source,target) in enumerate(zip(local,local[1:])))
+    lanes=[
+        {"id":"lane_client","name":"Accueil","processRef":processes[0],"participantRef":participants[0]["id"],"properties":{}},
+        {"id":"lane_company","name":"Finance","processRef":processes[1],"participantRef":participants[1]["id"],"properties":{}},
+    ]
+    structural=v2(processes,nodes,flows,participants,lanes)
+    invalid={"schemaVersion":"2.0","processes":[{"id":1,"name":"bad","description":"","executable":False,"properties":{}}],"participants":[],"lanes":[],"nodes":[],"flows":[],"messageFlows":[],"ambiguities":[]}
+    req=empty_requirements(participants=[{"name":name} for name in participant_names],activities=[{"name":"Missing required step"}])
+    g=CoverageGenerator(req,broken,structural,invalid)
+    c=WorkflowCompiler(g,SCHEMA,max_repair_attempts=1);c._bpmn_generator=Xml()
+    result=c.compile("critical state propagation")
+    assert result["error"]["stage"]=="coverage_repair"
+    assert len(result["normalized_workflow"]["participants"])==3
+    assert len(result["normalized_workflow"]["nodes"])==12
+    assert result["pipeline_debug"]["before_coverage_validation"]["participants"]==3
+    assert result["pipeline_debug"]["before_coverage_validation"]["nodes"]==12
+    assert result["pipeline_debug"]["coverage_candidate"]["nodes"]==0
+    assert result["pipeline_debug"]["final_current_workflow"]["nodes"]==12
+    assert result["repair_report"][-1]["coverage_repair"]["accepted_candidate"] is False

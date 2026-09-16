@@ -131,7 +131,7 @@ class WorkflowRepairer:
                 best = copy.deepcopy(candidate)
                 best_score = candidate_score
 
-            coverage_diagnostic=self._coverage_diagnostic(current_structural,candidate_structural,current_coverage,candidate_coverage,accepted_candidate) if repair_kind=="coverage" else None
+            coverage_diagnostic=self._coverage_diagnostic(current_structural,candidate_structural,current_coverage,candidate_coverage,accepted_candidate,candidate) if repair_kind=="coverage" else None
             if accepted_candidate and self._is_valid(output_errors):
                 report.append(
                     self._attempt(
@@ -286,6 +286,7 @@ class WorkflowRepairer:
 
     @classmethod
     def _coverage_candidate_acceptable(cls,current,candidate,current_structural,candidate_structural,current_coverage,candidate_coverage):
+        if cls.is_catastrophic_regression(current,candidate,candidate_structural):return False
         for key in ("nodes","participants","processes"):
             before=current.get(key,[]) if isinstance(current.get(key,[]),list) else []
             after=candidate.get(key,[]) if isinstance(candidate.get(key,[]),list) else []
@@ -297,10 +298,25 @@ class WorkflowRepairer:
         return after_unknown<=before_unknown and cls._error_count(candidate_coverage)<cls._error_count(current_coverage)
 
     @classmethod
-    def _coverage_diagnostic(cls,before_structure,after_structure,before_coverage,after_coverage,accepted):
+    def is_catastrophic_regression(cls,before,candidate,candidate_errors):
+        def count(workflow,key):
+            value=workflow.get(key,[]) if isinstance(workflow,Mapping) else []
+            return len(value) if isinstance(value,list) else 0
+        if count(before,"nodes") and not count(candidate,"nodes"):return True
+        if count(before,"participants") and not count(candidate,"participants"):return True
+        if count(before,"processes")>1 and count(candidate,"processes")<=1:return True
+        codes=[str(error.get("code","")) for error in candidate_errors if error.get("severity","error")=="error"]
+        if "JSON_SCHEMA_ERROR" in codes:return True
+        unknown={"UNKNOWN_NODE_PROCESS","UNKNOWN_MESSAGE_FLOW_SOURCE","UNKNOWN_MESSAGE_FLOW_TARGET"}
+        return sum(code in unknown for code in codes)>=3
+
+    @classmethod
+    def _coverage_diagnostic(cls,before_structure,after_structure,before_coverage,after_coverage,accepted,candidate):
         return {"errors_before":cls._error_count(before_coverage),"errors_after":cls._error_count(after_coverage),
                 "structure_errors_before":cls._error_count(before_structure),"structure_errors_after":cls._error_count(after_structure),
-                "accepted_candidate":accepted}
+                "accepted_candidate":accepted,
+                "candidate_counts":{key:len(candidate.get(key,[])) if isinstance(candidate.get(key),list) else 0
+                                    for key in ("processes","participants","lanes","nodes","flows","messageFlows")}}
 
     @staticmethod
     def _pipeline_error(code: str, message: str) -> RepairError:
