@@ -117,6 +117,8 @@ class WorkflowRepairer:
             candidate = prepared["workflow"]
             output_errors = [*prepared["errors"],*CoverageValidator().validate(requirements or {},candidate)]
             candidate_score = self._score(output_errors)
+            current_score = self._score(current_errors)
+            accepted_candidate = candidate_score <= current_score
             if candidate_score < best_score:
                 best = copy.deepcopy(candidate)
                 best_score = candidate_score
@@ -129,6 +131,8 @@ class WorkflowRepairer:
                         input_errors,
                         output_errors,
                         "Le workflow corrigé est valide.",
+                        True,
+                        self._error_count(current_errors),
                     )
                 )
                 return candidate, report
@@ -140,11 +144,14 @@ class WorkflowRepairer:
                     input_errors,
                     output_errors,
                     "Le workflow corrigé contient encore des erreurs.",
+                    accepted_candidate,
+                    self._error_count(current_errors),
                 )
             )
-            current = candidate
-            current_errors = output_errors
-            prompt_errors = output_errors
+            if accepted_candidate:
+                current = candidate
+                current_errors = output_errors
+            prompt_errors = current_errors
 
         return best, report
 
@@ -223,13 +230,15 @@ class WorkflowRepairer:
         return not any(error.get("severity", "error") == "error" for error in errors)
 
     @staticmethod
-    def _score(errors: list[RepairError]) -> tuple[int, int, int, int]:
+    def _score(errors: list[RepairError]) -> tuple[int, int, int, int, int]:
         """Rank blocking, critical structural, total issues, then warnings."""
         blocking = sum(error.get("severity", "error") == "error" for error in errors)
+        structural_codes={"UNREACHABLE_NODE","ISOLATED_TASK","MISSING_INCOMING_FLOW","MISSING_OUTGOING_FLOW"}
+        structural=sum(error.get("severity","error")=="error" and error.get("code") in structural_codes for error in errors)
         prefixes=("JSON_SCHEMA","MISSING_","PROCESS_MISSING","UNKNOWN_","FLOW_PROCESS","SEQUENCE_FLOW_CROSSES")
         critical=sum(error.get("severity","error")=="error" and str(error.get("code","")).startswith(prefixes) for error in errors)
         warnings=sum(error.get("severity")=="warning" for error in errors)
-        return blocking,critical,len(errors),warnings
+        return blocking,structural,critical,len(errors),warnings
 
     @staticmethod
     def _attempt(
@@ -238,6 +247,8 @@ class WorkflowRepairer:
         input_errors: list[RepairError],
         output_errors: list[RepairError],
         message: str,
+        accepted_candidate: bool = False,
+        errors_before: int | None = None,
     ) -> RepairAttempt:
         """Build one stable attempt report entry."""
         return {
@@ -246,7 +257,14 @@ class WorkflowRepairer:
             "input_errors": copy.deepcopy(input_errors),
             "output_errors": copy.deepcopy(output_errors),
             "message": message,
+            "accepted_candidate": accepted_candidate,
+            "errors_before": errors_before if errors_before is not None else WorkflowRepairer._error_count(input_errors),
+            "errors_after": WorkflowRepairer._error_count(output_errors),
         }
+
+    @staticmethod
+    def _error_count(errors: list[RepairError]) -> int:
+        return sum(error.get("severity","error")=="error" for error in errors)
 
     @staticmethod
     def _pipeline_error(code: str, message: str) -> RepairError:

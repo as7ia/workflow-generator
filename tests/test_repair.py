@@ -24,7 +24,7 @@ def test_generated_candidate_runs_safe_repairs():
     result,_=WorkflowRepairer().repair(v1(False),ERROR,Queue(candidate));assert next(x for x in result["flows"] if x["id"]=="b")["condition"] is None
 def test_initial_candidate_can_remain_best():
     worse={"schemaVersion":"2.0","processes":[{"id":"p","name":"P","description":"","executable":False,"properties":{}}],"participants":[],"lanes":[],"nodes":[{"id":f"x{i}","type":"invalid","name":"X","processRef":"p","participantRef":None,"laneRef":None,"actor":None,"properties":{}} for i in range(10)],"flows":[],"messageFlows":[],"ambiguities":[]}
-    result,_=WorkflowRepairer(1).repair(v1(False),ERROR,Queue(worse));assert result["schemaVersion"]=="2.0" and result["nodes"]
+    result,report=WorkflowRepairer(1).repair(v1(False),ERROR,Queue(worse));assert result["schemaVersion"]=="2.0" and result["nodes"] and report[0]["accepted_candidate"] is False and report[0]["errors_after"]>report[0]["errors_before"]
 def test_input_immutable():
     original=v1(False);before=copy.deepcopy(original);WorkflowRepairer().repair(original,ERROR,Queue(v1()));assert original==before
 def test_prompt_teaches_v2_only():
@@ -32,7 +32,7 @@ def test_prompt_teaches_v2_only():
 def test_prompt_includes_error():
     assert "PROCESS_MISSING_END_EVENT" in WorkflowRepairer().build_repair_prompt(v1(False),ERROR)
 def test_report_shape():
-    _,report=WorkflowRepairer().repair(v1(False),ERROR,Queue(v1()));assert set(report[0])=={"attempt","status","input_errors","output_errors","message"}
+    _,report=WorkflowRepairer().repair(v1(False),ERROR,Queue(v1()));assert set(report[0])=={"attempt","status","input_errors","output_errors","message","accepted_candidate","errors_before","errors_after"}
 def test_invalid_generator_output_reported():
     _,report=WorkflowRepairer(1).repair(v1(False),ERROR,Queue("bad"));assert any(e["code"]=="GENERATOR_INVALID_OUTPUT" for e in report[0]["output_errors"])
 def test_generator_exception_reported():

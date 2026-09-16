@@ -197,6 +197,8 @@ class CanonicalWorkflowPreparer:
         used_node_ids={n.get("id") for n in nodes if isinstance(n,Mapping)}
         used_flow_ids={f.get("id") for f in flows if isinstance(f,Mapping)}
         message_endpoints={endpoint for m in messages if isinstance(m,Mapping) for endpoint in (m.get("source"),m.get("target"))}
+        message_sources={m.get("source") for m in messages if isinstance(m,Mapping)}
+        message_targets={m.get("target") for m in messages if isinstance(m,Mapping)}
         participant_by_process={p.get("processRef"):p.get("id") for p in participants if isinstance(p,Mapping)}
 
         for process_id in sorted(split_processes):
@@ -217,8 +219,10 @@ class CanonicalWorkflowPreparer:
                 roots=[n for n in local_nodes if incoming.get(n.get("id"),0)==0 and
                        (outgoing.get(n.get("id"),0)>0 or n.get("id") in message_endpoints)]
             else:
-                roots=[n for n in local_nodes if n.get("type")!="startEvent" and incoming.get(n.get("id"),0)==0 and
-                       (n.get("id") in converted_targets or n.get("id") in isolated_message_ids)]
+                all_roots=[n for n in local_nodes if n.get("type")!="startEvent" and incoming.get(n.get("id"),0)==0]
+                eligible=[n for n in all_roots if n.get("id") in message_targets or n.get("id") in converted_targets or n.get("id") in isolated_message_ids]
+                start_has_outgoing=outgoing.get(starts[0]["id"],0)>0
+                roots=eligible if len(eligible)==1 else (all_roots if not start_has_outgoing and len(all_roots)==1 else [])
             for root in roots:
                 cls._add_technical_flow(flows,used_flow_ids,starts[0]["id"],root["id"],process_id,report,"START_FLOW_ADDED")
                 incoming[root["id"]]=incoming.get(root["id"],0)+1
@@ -230,8 +234,10 @@ class CanonicalWorkflowPreparer:
                        (incoming.get(n.get("id"),0)>0 or n.get("id") in message_endpoints)]
                 if not roots and len(local_nodes)==1 and local_nodes[0].get("type")=="startEvent":sinks=local_nodes
             else:
-                sinks=[n for n in local_nodes if n.get("type")!="endEvent" and outgoing.get(n.get("id"),0)==0 and
-                       (n.get("id") in converted_sources or n.get("id") in isolated_message_ids)]
+                all_sinks=[n for n in local_nodes if n.get("type")!="endEvent" and outgoing.get(n.get("id"),0)==0]
+                eligible=[n for n in all_sinks if n.get("id") in message_sources or n.get("id") in converted_sources or n.get("id") in isolated_message_ids]
+                end_has_incoming=incoming.get(ends[0]["id"],0)>0
+                sinks=eligible if len(eligible)==1 else (all_sinks if not end_has_incoming and len(all_sinks)==1 else [])
             for sink in sinks:
                 cls._add_technical_flow(flows,used_flow_ids,sink["id"],ends[0]["id"],process_id,report,"END_FLOW_ADDED")
 
