@@ -1,0 +1,382 @@
+[
+  {
+    "ambiguity_count": 0,
+    "bpmn_generated": false,
+    "coverage_error_count": 0,
+    "failure_message": "Transformers n'est pas installé. Exécutez 'pip install -r requirements.txt'.",
+    "generation_stats": {
+      "coverage_repair_calls": 0,
+      "initial_generation_calls": 0,
+      "semantic_requirement_calls": 0,
+      "structural_repair_calls": 0,
+      "total_qwen_calls": 0
+    },
+    "generator_exception": null,
+    "layout_metrics": {},
+    "name": "linear_simple",
+    "pipeline_debug": {},
+    "prompt_lengths": [],
+    "repair_attempts": 0,
+    "routing_metrics": {
+      "edge_count": 0,
+      "edge_shape_collisions": null
+    },
+    "schema_error_count": 0,
+    "semantic_error_count": 0,
+    "stage": "GENERATION",
+    "success": false,
+    "validation_issues": [
+      "MODEL_LOAD_FAILED"
+    ],
+    "workflow_counts": {
+      "flows": 0,
+      "lanes": 0,
+      "messageFlows": 0,
+      "nodes": 0,
+      "participants": 0,
+      "processes": 0
+    }
+  },
+  {
+    "ambiguity_count": 0,
+    "bpmn_generated": false,
+    "coverage_error_count": 0,
+    "failure_message": "Transformers n'est pas installé. Exécutez 'pip install -r requirements.txt'.",
+    "generation_stats": {
+      "coverage_repair_calls": 0,
+      "initial_generation_calls": 0,
+      "semantic_requirement_calls": 0,
+      "structural_repair_calls": 0,
+      "total_qwen_calls": 0
+    },
+    "generator_exception": null,
+    "layout_metrics": {},
+    "name": "exclusive_decision",
+    "pipeline_debug": {},
+    "prompt_lengths": [],
+    "repair_attempts": 0,
+    "routing_metrics": {
+      "edge_count": 0,
+      "edge_shape_collisions": null
+    },
+    "schema_error_count": 0,
+    "semantic_error_count": 0,
+    "stage": "GENERATION",
+    "success": false,
+    "validation_issues": [
+      "MODEL_LOAD_FAILED"
+    ],
+    "workflow_counts": {
+      "flows": 0,
+      "lanes": 0,
+      "messageFlows": 0,
+      "nodes": 0,
+      "participants": 0,
+      "processes": 0
+    }
+  },
+  {
+    "ambiguity_count": 0,
+    "bpmn_generated": false,
+    "coverage_error_count": 0,
+    "failure_message": "Transformers n'est pas installé. Exécutez 'pip install -r requirements.txt'.",
+    "generation_stats": {
+      "coverage_repair_calls": 0,
+      "initial_generation_calls": 0,
+      "semantic_requirement_calls": 0,
+      "structural_repair_calls": 0,
+      "total_qwen_calls": 0
+    },
+    "generator_exception": null,
+    "layout_metrics": {},
+    "name": "parallel_work",
+    "pipeline_debug": {},
+    "prompt_lengths": [],
+    "repair_attempts": 0,
+    "routing_metrics": {
+      "edge_count": 0,
+      "edge_shape_collisions": null
+    },
+    "schema_error_count": 0,
+    "semantic_error_count": 0,
+    "stage": "GENERATION",
+    "success": false,
+    "validation_issues": [
+      "MODEL_LOAD_FAILED"
+    ],
+    "workflow_counts": {
+      "flows": 0,
+      "lanes": 0,
+      "messageFlows": 0,
+      "nodes": 0,
+      "participants": 0,
+      "processes": 0
+    }
+  },
+  {
+    "ambiguity_count": 0,
+    "bpmn_generated": false,
+    "coverage_error_count": 0,
+    "failure_message": "Transformers n'est pas installé. Exécutez 'pip install -r requirements.txt'.",
+    "generation_stats": {
+      "coverage_repair_calls": 0,
+      "initial_generation_calls": 0,
+      "semantic_requirement_calls": 0,
+      "structural_repair_calls": 0,
+      "total_qwen_calls": 0
+    },
+    "generator_exception": null,
+    "layout_metrics": {},
+    "name": "explicit_timer",
+    "pipeline_debug": {},
+    "prompt_lengths": [],
+    "repair_attempts": 0,
+    "routing_metrics": {
+      "edge_count": 0,
+      "edge_shape_collisions": null
+    },
+    "schema_error_count": 0,
+    "semantic_error_count": 0,
+    "stage": "GENERATION",
+    "success": false,
+    "validation_issues": [
+      "MODEL_LOAD_FAILED"
+    ],
+    "workflow_counts": {
+      "flows": 0,
+      "lanes": 0,
+      "messageFlows": 0,
+      "nodes": 0,
+      "participants": 0,
+      "processes": 0
+    }
+  },
+  {
+    "ambiguity_count": 0,
+    "bpmn_generated": false,
+    "coverage_error_count": 0,
+    "failure_message": "Transformers n'est pas installé. Exécutez 'pip install -r requirements.txt'.",
+    "generation_stats": {
+      "coverage_repair_calls": 0,
+      "initial_generation_calls": 0,
+      "semantic_requirement_calls": 0,
+      "structural_repair_calls": 0,
+      "total_qwen_calls": 0
+    },
+    "generator_exception": null,
+    "layout_metrics": {},
+    "name": "loop_with_return",
+    "pipeline_debug": {},
+    "prompt_lengths": [],
+    "repair_attempts": 0,
+    "routing_metrics": {
+      "edge_count": 0,
+      "edge_shape_collisions": null
+    },
+    "schema_error_count": 0,
+    "semantic_error_count": 0,
+    "stage": "GENERATION",
+    "success": false,
+    "validation_issues": [
+      "MODEL_LOAD_FAILED"
+    ],
+    "workflow_counts": {
+      "flows": 0,
+      "lanes": 0,
+      "messageFlows": 0,
+      "nodes": 0,
+      "participants": 0,
+      "processes": 0
+    }
+  },
+  {
+    "ambiguity_count": 0,
+    "bpmn_generated": false,
+    "coverage_error_count": 0,
+    "failure_message": "Transformers n'est pas installé. Exécutez 'pip install -r requirements.txt'.",
+    "generation_stats": {
+      "coverage_repair_calls": 0,
+      "initial_generation_calls": 0,
+      "semantic_requirement_calls": 0,
+      "structural_repair_calls": 0,
+      "total_qwen_calls": 0
+    },
+    "generator_exception": null,
+    "layout_metrics": {},
+    "name": "three_participants",
+    "pipeline_debug": {},
+    "prompt_lengths": [],
+    "repair_attempts": 0,
+    "routing_metrics": {
+      "edge_count": 0,
+      "edge_shape_collisions": null
+    },
+    "schema_error_count": 0,
+    "semantic_error_count": 0,
+    "stage": "GENERATION",
+    "success": false,
+    "validation_issues": [
+      "MODEL_LOAD_FAILED"
+    ],
+    "workflow_counts": {
+      "flows": 0,
+      "lanes": 0,
+      "messageFlows": 0,
+      "nodes": 0,
+      "participants": 0,
+      "processes": 0
+    }
+  },
+  {
+    "ambiguity_count": 0,
+    "bpmn_generated": false,
+    "coverage_error_count": 0,
+    "failure_message": "Transformers n'est pas installé. Exécutez 'pip install -r requirements.txt'.",
+    "generation_stats": {
+      "coverage_repair_calls": 0,
+      "initial_generation_calls": 0,
+      "semantic_requirement_calls": 0,
+      "structural_repair_calls": 0,
+      "total_qwen_calls": 0
+    },
+    "generator_exception": null,
+    "layout_metrics": {},
+    "name": "multiple_lanes",
+    "pipeline_debug": {},
+    "prompt_lengths": [],
+    "repair_attempts": 0,
+    "routing_metrics": {
+      "edge_count": 0,
+      "edge_shape_collisions": null
+    },
+    "schema_error_count": 0,
+    "semantic_error_count": 0,
+    "stage": "GENERATION",
+    "success": false,
+    "validation_issues": [
+      "MODEL_LOAD_FAILED"
+    ],
+    "workflow_counts": {
+      "flows": 0,
+      "lanes": 0,
+      "messageFlows": 0,
+      "nodes": 0,
+      "participants": 0,
+      "processes": 0
+    }
+  },
+  {
+    "ambiguity_count": 0,
+    "bpmn_generated": false,
+    "coverage_error_count": 0,
+    "failure_message": "Transformers n'est pas installé. Exécutez 'pip install -r requirements.txt'.",
+    "generation_stats": {
+      "coverage_repair_calls": 0,
+      "initial_generation_calls": 0,
+      "semantic_requirement_calls": 0,
+      "structural_repair_calls": 0,
+      "total_qwen_calls": 0
+    },
+    "generator_exception": null,
+    "layout_metrics": {},
+    "name": "collaboration_decision_timer",
+    "pipeline_debug": {},
+    "prompt_lengths": [],
+    "repair_attempts": 0,
+    "routing_metrics": {
+      "edge_count": 0,
+      "edge_shape_collisions": null
+    },
+    "schema_error_count": 0,
+    "semantic_error_count": 0,
+    "stage": "GENERATION",
+    "success": false,
+    "validation_issues": [
+      "MODEL_LOAD_FAILED"
+    ],
+    "workflow_counts": {
+      "flows": 0,
+      "lanes": 0,
+      "messageFlows": 0,
+      "nodes": 0,
+      "participants": 0,
+      "processes": 0
+    }
+  },
+  {
+    "ambiguity_count": 0,
+    "bpmn_generated": false,
+    "coverage_error_count": 0,
+    "failure_message": "Transformers n'est pas installé. Exécutez 'pip install -r requirements.txt'.",
+    "generation_stats": {
+      "coverage_repair_calls": 0,
+      "initial_generation_calls": 0,
+      "semantic_requirement_calls": 0,
+      "structural_repair_calls": 0,
+      "total_qwen_calls": 0
+    },
+    "generator_exception": null,
+    "layout_metrics": {},
+    "name": "large_workflow",
+    "pipeline_debug": {},
+    "prompt_lengths": [],
+    "repair_attempts": 0,
+    "routing_metrics": {
+      "edge_count": 0,
+      "edge_shape_collisions": null
+    },
+    "schema_error_count": 0,
+    "semantic_error_count": 0,
+    "stage": "GENERATION",
+    "success": false,
+    "validation_issues": [
+      "MODEL_LOAD_FAILED"
+    ],
+    "workflow_counts": {
+      "flows": 0,
+      "lanes": 0,
+      "messageFlows": 0,
+      "nodes": 0,
+      "participants": 0,
+      "processes": 0
+    }
+  },
+  {
+    "ambiguity_count": 0,
+    "bpmn_generated": false,
+    "coverage_error_count": 0,
+    "failure_message": "Transformers n'est pas installé. Exécutez 'pip install -r requirements.txt'.",
+    "generation_stats": {
+      "coverage_repair_calls": 0,
+      "initial_generation_calls": 0,
+      "semantic_requirement_calls": 0,
+      "structural_repair_calls": 0,
+      "total_qwen_calls": 0
+    },
+    "generator_exception": null,
+    "layout_metrics": {},
+    "name": "intentional_ambiguity",
+    "pipeline_debug": {},
+    "prompt_lengths": [],
+    "repair_attempts": 0,
+    "routing_metrics": {
+      "edge_count": 0,
+      "edge_shape_collisions": null
+    },
+    "schema_error_count": 0,
+    "semantic_error_count": 0,
+    "stage": "GENERATION",
+    "success": false,
+    "validation_issues": [
+      "MODEL_LOAD_FAILED"
+    ],
+    "workflow_counts": {
+      "flows": 0,
+      "lanes": 0,
+      "messageFlows": 0,
+      "nodes": 0,
+      "participants": 0,
+      "processes": 0
+    }
+  }
+]
