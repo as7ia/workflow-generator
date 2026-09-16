@@ -82,10 +82,19 @@ def test_coverage_error_is_repaired_with_description_and_requirements():
     missing=v2();covered=v2(nodes=[n("s",t="startEvent"),n("t",t="intermediateCatchEvent",properties={"timer":{"kind":"duration","value":"P2D"}}),n("e",t="endEvent")])
     g=CoverageGenerator(empty_requirements(timers=[{"duration":"P2D"}]),missing,covered);c=WorkflowCompiler(g,SCHEMA);c._bpmn_generator=Xml()
     result=c.compile("wait two days")
-    assert result["success"] and result["coverage_errors"]==[] and result["semantic_requirements"]["timers"]==[{"duration":"P2D"}]
+    assert result["success"] and result["coverage_errors"]==[] and result["semantic_requirements"]["timers"]==[{"kind":"duration","value":"P2D"}]
     assert len(g.prompts)==2 and "wait two days" in g.prompts[1] and "P2D" in g.prompts[1]
 
 def test_coverage_warnings_do_not_block_compilation():
     g=CoverageGenerator(empty_requirements(ambiguities=[{"message":"unclear optional role"}]),v2());c=WorkflowCompiler(g,SCHEMA);c._bpmn_generator=Xml()
     result=c.compile("valid but ambiguous")
     assert result["success"] and any(x["code"]=="SEMANTIC_AMBIGUITY" for x in result["coverage_errors"]) and len(g.prompts)==1
+
+def test_structural_repair_precedes_coverage_repair():
+    broken=v2(nodes=[n("s",t="startEvent"),n("t")],flows=[f("f","s","t")])
+    structural=v2();covered=v2(nodes=[n("s",t="startEvent"),n("t",t="intermediateCatchEvent",properties={"timer":{"kind":"duration","value":"P2D"}}),n("e",t="endEvent")])
+    g=CoverageGenerator(empty_requirements(timers=[{"duration":"P2D"}]),broken,structural,covered);c=WorkflowCompiler(g,SCHEMA);c._bpmn_generator=Xml()
+    result=c.compile("wait two days")
+    assert result["success"] and len(g.prompts)==3
+    assert "PROCESS_MISSING_END_EVENT" in g.prompts[1] and "Exigences sémantiques" not in g.prompts[1]
+    assert "MISSING_TIMER" in g.prompts[2] and "P2D" in g.prompts[2]

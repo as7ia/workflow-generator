@@ -105,8 +105,8 @@ class WorkflowCompiler:
         semantic_errors = prepared["semantic_errors"]
         result["schema_errors"] = schema_errors
         result["semantic_errors"] = semantic_errors
-        result["coverage_errors"]=CoverageValidator().validate(requirements,normalized)
-        blocking = self._blocking_errors(schema_errors, semantic_errors,result["coverage_errors"])
+        result["coverage_errors"]=[]
+        blocking = self._blocking_errors(schema_errors, semantic_errors)
 
         if blocking:
             try:
@@ -118,8 +118,6 @@ class WorkflowCompiler:
                     workflow=current_workflow,
                     errors=blocking,
                     generator=self.generator,
-                    description=description,
-                    requirements=requirements,
                 )
                 prepared = preparer.prepare_and_validate(repaired_workflow)
                 normalized = prepared["workflow"]
@@ -133,9 +131,8 @@ class WorkflowCompiler:
                 result["repair_report"] = repair_report
                 result["schema_errors"] = prepared["schema_errors"]
                 result["semantic_errors"] = prepared["semantic_errors"]
-                result["coverage_errors"]=CoverageValidator().validate(requirements,normalized)
                 blocking = self._blocking_errors(
-                    result["schema_errors"], result["semantic_errors"],result["coverage_errors"]
+                    result["schema_errors"], result["semantic_errors"]
                 )
             except Exception as exc:
                 return self._fail(result, "repair", exc)
@@ -144,6 +141,24 @@ class WorkflowCompiler:
                     "stage": "repair",
                     "message": "Le meilleur workflow obtenu reste invalide après les tentatives de réparation.",
                 }
+                return result
+
+        result["coverage_errors"]=CoverageValidator().validate(requirements,normalized)
+        blocking=self._blocking_errors(result["coverage_errors"])
+        if blocking:
+            try:
+                repairer=WorkflowRepairer(max_attempts=self.max_repair_attempts,schema=schema)
+                repaired_workflow,coverage_report=repairer.repair(
+                    workflow=copy.deepcopy(normalized),errors=blocking,generator=self.generator,
+                    description=description,requirements=requirements)
+                prepared=preparer.prepare_and_validate(repaired_workflow);normalized=prepared["workflow"]
+                result["normalized_workflow"]=normalized;result["repair_report"].extend(coverage_report)
+                result["schema_errors"]=prepared["schema_errors"];result["semantic_errors"]=prepared["semantic_errors"]
+                result["coverage_errors"]=CoverageValidator().validate(requirements,normalized)
+                blocking=self._blocking_errors(result["schema_errors"],result["semantic_errors"],result["coverage_errors"])
+            except Exception as exc:return self._fail(result,"coverage_repair",exc)
+            if blocking:
+                result["error"]={"stage":"coverage_repair","message":"Le workflow ne couvre pas encore toutes les exigences."}
                 return result
 
         try:

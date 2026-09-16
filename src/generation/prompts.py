@@ -7,6 +7,10 @@ def build_semantic_requirements_prompt(description:str)->str:
     return ("SEMANTIC_REQUIREMENTS_EXTRACTION\nExtract only business requirements, not a BPMN workflow.\n"
         "Return JSON with exactly these arrays: participants, lanes, timers, parallelisms, decisions, interactions, activities, ambiguities.\n"
         "Timers use ISO 8601 duration; interactions use source and target; parallelisms may list activities.\n"
+        "Participants are external actors/organizations. Lanes are internal roles and require name plus participant.\n"
+        "Interactions use participant names; preserve optional sourceLane/targetLane. One parallelism contains a branches array.\n"
+        "A decision requires a genuine conditional choice and at least two outcomes; actions or states are not decisions.\n"
+        "Timers use kind, value and optional activity. Do not duplicate a timer activity in activities. Deduplicate all requirements.\n"
         "Recognize concurrency, delays, actors, internal roles, conditions, communications and required activities.\n"
         f"Description:\n{description}\nReturn JSON only.")
 
