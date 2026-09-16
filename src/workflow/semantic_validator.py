@@ -401,26 +401,23 @@ class SemanticValidator:
 
     def _validate_cycles(self, process_id, adjacency, issues):
         state: dict[str, int] = {}
-        stack: list[str] = []
         reported: set[frozenset[str]] = set()
-
-        def visit(node_id):
-            state[node_id] = 1
-            stack.append(node_id)
-            for target in adjacency[node_id]:
-                if state.get(target, 0) == 0:
-                    visit(target)
-                elif state.get(target) == 1:
-                    cycle = frozenset(stack[stack.index(target):])
-                    if cycle not in reported:
-                        reported.add(cycle)
-                        issues.append(self._issue("CYCLE_DETECTED", f"Une boucle a été détectée dans le process '{process_id}'.", node_id=target, process_id=process_id, severity="warning"))
-            stack.pop()
-            state[node_id] = 2
-
-        for node_id in sorted(adjacency):
-            if state.get(node_id, 0) == 0:
-                visit(node_id)
+        for root in sorted(adjacency):
+            if state.get(root,0)!=0:continue
+            state[root]=1;path=[root];positions={root:0};frames=[(root,0)]
+            while frames:
+                node,index=frames[-1]
+                if index<len(adjacency[node]):
+                    target=adjacency[node][index];frames[-1]=(node,index+1)
+                    if state.get(target,0)==0:
+                        state[target]=1;positions[target]=len(path);path.append(target);frames.append((target,0))
+                    elif state.get(target)==1:
+                        cycle=frozenset(path[positions[target]:])
+                        if cycle not in reported:
+                            reported.add(cycle)
+                            issues.append(self._issue("CYCLE_DETECTED", f"Une boucle a été détectée dans le process '{process_id}'.", node_id=target, process_id=process_id, severity="warning"))
+                else:
+                    frames.pop();state[node]=2;positions.pop(node,None);path.pop()
 
     @staticmethod
     def _walk(starts, adjacency):

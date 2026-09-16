@@ -14,8 +14,6 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Protocol
 
-from .normalizer import WorkflowNormalizer
-from .semantic_validator import SemanticValidator
 from .preparation import CanonicalWorkflowPreparer
 from .coverage_validator import CoverageValidator
 
@@ -41,7 +39,7 @@ class WorkflowRepairer:
         """Create a repairer with an optional non-negative attempt limit."""
         limit = self.MAX_ATTEMPTS if max_attempts is None else max_attempts
         if not isinstance(limit, int) or isinstance(limit, bool) or limit < 0:
-            raise ValueError("max_attempts doit être un entier positif ou nul")
+            raise ValueError("max_attempts doit Ãªtre un entier positif ou nul")
         self.max_attempts = limit
         self._schema = copy.deepcopy(schema) if isinstance(schema, dict) else self._load_effective_schema()
         self._preparer = CanonicalWorkflowPreparer(self._schema)
@@ -89,7 +87,7 @@ class WorkflowRepairer:
                 generated = generator.generate_json(prompt)
             except Exception as exc:  # Generator implementations are external.
                 failure = self._pipeline_error(
-                    "GENERATOR_EXCEPTION", f"Le générateur a échoué : {exc}"
+                    "GENERATOR_EXCEPTION", f"Le gÃ©nÃ©rateur a Ã©chouÃ© : {exc}"
                 )
                 report.append(
                     self._attempt(
@@ -97,7 +95,7 @@ class WorkflowRepairer:
                         "failed",
                         input_errors,
                         [*copy.deepcopy(current_errors), failure],
-                        "La tentative a échoué pendant l'appel au générateur.",
+                        "La tentative a Ã©chouÃ© pendant l'appel au gÃ©nÃ©rateur.",
                     )
                 )
                 prompt_errors = self._prompt_errors(current_errors)
@@ -108,7 +106,7 @@ class WorkflowRepairer:
             if not isinstance(generated, Mapping):
                 failure = self._pipeline_error(
                     "GENERATOR_INVALID_OUTPUT",
-                    "Le générateur n'a pas retourné un objet JSON.",
+                    "Le gÃ©nÃ©rateur n'a pas retournÃ© un objet JSON.",
                 )
                 report.append(
                     self._attempt(
@@ -116,7 +114,7 @@ class WorkflowRepairer:
                         "failed",
                         input_errors,
                         [*copy.deepcopy(current_errors), failure],
-                        "La sortie du générateur a été ignorée car elle n'est pas un dictionnaire.",
+                        "La sortie du gÃ©nÃ©rateur a Ã©tÃ© ignorÃ©e car elle n'est pas un dictionnaire.",
                     )
                 )
                 prompt_errors = self._prompt_errors(current_errors)
@@ -143,7 +141,7 @@ class WorkflowRepairer:
                         "success",
                         input_errors,
                         output_errors,
-                        "Le workflow corrigé est valide.",
+                        "Le workflow corrigÃ© est valide.",
                         True,
                         self._error_count(current_errors),
                         coverage_diagnostic,
@@ -157,7 +155,7 @@ class WorkflowRepairer:
                     "failed",
                     input_errors,
                     output_errors,
-                    "Le workflow corrigé contient encore des erreurs.",
+                    "Le workflow corrigÃ© contient encore des erreurs.",
                     accepted_candidate,
                     self._error_count(current_errors),
                     coverage_diagnostic,
@@ -185,64 +183,6 @@ class WorkflowRepairer:
         if repair_kind == "coverage":
             return build_coverage_repair_prompt(workflow, errors, requirements or {})
         return build_repair_prompt(workflow, self._prompt_errors(errors), self._schema)
-        """Previous prompt implementation retained below temporarily unreachable."""
-        error_lines = []
-        for error in errors if isinstance(errors, list) else []:
-            if not isinstance(error, Mapping):
-                error_lines.append(f"- {error}")
-                continue
-            code = error.get("code", "ERROR")
-            message = error.get("message", "Erreur non décrite")
-            location = error.get("path") or error.get("node_id") or error.get("flow_id")
-            suffix = f" (élément : {location})" if location else ""
-            error_lines.append(f"- [{code}] {message}{suffix}")
-        if not error_lines:
-            error_lines.append("- Le workflow ne satisfait pas les validations structurelles ou sémantiques.")
-
-        serialized = json.dumps(workflow, ensure_ascii=False, indent=2, sort_keys=True)
-        codes = {error.get("code") for error in errors if isinstance(error, Mapping)}
-        messages = " ".join(
-            str(error.get("message", "")) for error in errors if isinstance(error, Mapping)
-        ).lower()
-        targeted: list[str] = []
-        if "JSON_SCHEMA_ERROR" in codes and "messageflow" in messages.replace(" ", ""):
-            targeted.append("Déplace tout messageFlow présent dans nodes vers la collection messageFlows.")
-        if "ISOLATED_TASK" in codes:
-            targeted.append("Connecte correctement toute tâche métier isolée; supprime-la uniquement si elle est inutile.")
-        if "PARALLEL_GATEWAY_CONDITION" in codes:
-            targeted.append("Supprime toutes les conditions des flux sortant d'une parallelGateway.")
-        targeted_text = "\n".join(targeted)
-        return (
-            "Le workflow JSON suivant est invalide.\n\n"
-            "Erreurs détectées :\n"
-            + "\n".join(error_lines)
-            + "\n\nWorkflow à corriger :\n"
-            + serialized
-            + "\n\nCorrige uniquement le JSON.\n"
-            "Conserve l'intention métier.\n"
-            "Ne supprime aucune branche utile.\n"
-            "N'invente pas de nouvelle étape sauf si elle est nécessaire pour corriger une erreur.\n"
-            "Corrige les références invalides.\n"
-            "Utilise uniquement source et target; n'utilise jamais sourceRef ni targetRef.\n"
-            "flows contient uniquement les sequence flows internes à un même participant ou pool.\n"
-            "Un sequence flow ne traverse jamais un pool; utilise messageFlows pour toute communication entre pools différents.\n"
-            "Un messageFlow relie des participants ou pools différents et ne porte aucune condition de séquence.\n"
-            "Chaque source et target doit correspondre à un node.id existant et aucun flux ne doit être incomplet.\n"
-            "Ajoute les événements de début ou de fin manquants si nécessaire.\n"
-            "Corrige les passerelles et ajoute les conditions manquantes aux sorties des passerelles exclusives.\n"
-            "Ne modifie pas les identifiants déjà valides sans raison.\n"
-            "Préserve les participants, pools, lanes, sequence flows et message flows.\n"
-            "Types de nœuds autorisés : startEvent, endEvent, userTask, serviceTask, manualTask, scriptTask, businessRuleTask, exclusiveGateway, parallelGateway, inclusiveGateway, eventBasedGateway, subProcess, intermediateCatchEvent, intermediateThrowEvent.\n"
-            "messageFlow doit uniquement apparaître dans messageFlows et jamais comme type de nœud.\n"
-            f"{targeted_text}\n"
-            "Retourne uniquement un objet JSON valide, sans Markdown, sans commentaire et sans explication."
-        )
-
-    def _validate(self, workflow: dict[str, Any]) -> list[RepairError]:
-        """Run the effective JSON Schema, then semantic validation."""
-        schema_errors = _StandardSchemaValidator(self._schema).validate(workflow)
-        semantic_errors = self._semantic_validator.validate(workflow)
-        return [*schema_errors, *semantic_errors]
 
     @staticmethod
     def _is_valid(errors: list[RepairError]) -> bool:
@@ -405,15 +345,15 @@ class _StandardSchemaValidator:
         if "const" in schema and instance != schema["const"]:
             self._add(errors, path, f"Valeur attendue : {schema['const']!r}.")
         if "enum" in schema and instance not in schema["enum"]:
-            self._add(errors, path, f"Valeur {instance!r} absente de l'énumération autorisée.")
+            self._add(errors, path, f"Valeur {instance!r} absente de l'Ã©numÃ©ration autorisÃ©e.")
         if isinstance(instance, str):
             if len(instance) < schema.get("minLength", 0):
-                self._add(errors, path, "Chaîne trop courte.")
+                self._add(errors, path, "ChaÃ®ne trop courte.")
             if "pattern" in schema and re.search(str(schema["pattern"]), instance) is None:
-                self._add(errors, path, "Chaîne non conforme au motif attendu.")
+                self._add(errors, path, "ChaÃ®ne non conforme au motif attendu.")
         if isinstance(instance, list):
             if len(instance) < schema.get("minItems", 0):
-                self._add(errors, path, "Liste contenant trop peu d'éléments.")
+                self._add(errors, path, "Liste contenant trop peu d'Ã©lÃ©ments.")
             item_schema = schema.get("items")
             if isinstance(item_schema, Mapping):
                 for index, value in enumerate(instance):
@@ -425,14 +365,14 @@ class _StandardSchemaValidator:
                     self._add(errors, self._join(path, key), f"Champ obligatoire '{key}' absent.")
             if schema.get("additionalProperties") is False:
                 for key in instance.keys() - properties.keys():
-                    self._add(errors, self._join(path, key), f"Champ supplémentaire '{key}' interdit.")
+                    self._add(errors, self._join(path, key), f"Champ supplÃ©mentaire '{key}' interdit.")
             for key, child_schema in properties.items():
                 if key in instance and isinstance(child_schema, Mapping):
                     self._visit(instance[key], child_schema, self._join(path, key), errors)
         for alternative_group in ("anyOf",):
             alternatives = schema.get(alternative_group)
             if alternatives and not any(self._passes(instance, alternative) for alternative in alternatives):
-                self._add(errors, path, "Aucune variante de schéma autorisée ne correspond.")
+                self._add(errors, path, "Aucune variante de schÃ©ma autorisÃ©e ne correspond.")
         for rule in schema.get("allOf", []):
             condition = rule.get("if")
             consequent = rule.get("then")

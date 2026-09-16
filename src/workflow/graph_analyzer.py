@@ -1,5 +1,6 @@
 """Deterministic analysis of canonical workflow model v2."""
 from __future__ import annotations
+import heapq
 from collections import deque
 from collections.abc import Mapping
 from typing import Any
@@ -81,33 +82,43 @@ class WorkflowGraphAnalyzer:
 
     @staticmethod
     def _components(ids,adj,rev):
-        unseen=set(ids); result=[]
-        while unseen:
-            todo=[min(unseen)]; found=set()
+        seen=set();result=[]
+        for root in ids:
+            if root in seen:continue
+            todo=[root];found=set()
             while todo:
                 n=todo.pop()
                 if n in found: continue
                 found.add(n); todo.extend(reversed(sorted(set(adj[n])|set(rev[n]))))
-            unseen-=found; result.append(sorted(found))
+            seen.update(found);result.append(sorted(found))
         return result
 
     @staticmethod
     def _scc(ids,adj):
-        counter=0; indexes={}; lows={}; stack=[]; active=set(); result=[]
-        def visit(n):
-            nonlocal counter
-            indexes[n]=lows[n]=counter; counter+=1; stack.append(n); active.add(n)
-            for target in adj[n]:
-                if target not in indexes: visit(target); lows[n]=min(lows[n],lows[target])
-                elif target in active: lows[n]=min(lows[n],indexes[target])
-            if lows[n]==indexes[n]:
-                comp=[]
-                while True:
-                    member=stack.pop(); active.remove(member); comp.append(member)
-                    if member==n: break
-                result.append(sorted(comp))
-        for n in ids:
-            if n not in indexes: visit(n)
+        """Return SCCs with iterative Kosaraju traversals (O(V + E))."""
+        visited=set();finish=[]
+        for root in ids:
+            if root in visited:continue
+            visited.add(root);stack=[(root,0)]
+            while stack:
+                node,index=stack[-1]
+                if index<len(adj[node]):
+                    target=adj[node][index];stack[-1]=(node,index+1)
+                    if target not in visited:visited.add(target);stack.append((target,0))
+                else:
+                    finish.append(node);stack.pop()
+        reverse={node:[] for node in ids}
+        for source,targets in adj.items():
+            for target in targets:reverse[target].append(source)
+        result=[];assigned=set()
+        for root in reversed(finish):
+            if root in assigned:continue
+            component=[];stack=[root];assigned.add(root)
+            while stack:
+                node=stack.pop();component.append(node)
+                for target in reversed(reverse[node]):
+                    if target not in assigned:assigned.add(target);stack.append(target)
+            result.append(sorted(component))
         return sorted(result,key=lambda c:c[0])
 
     @staticmethod
@@ -123,25 +134,28 @@ class WorkflowGraphAnalyzer:
         degree={n:0 for n in adj}
         for targets in adj.values():
             for target in targets: degree[target]+=1
-        ready=sorted(n for n,d in degree.items() if d==0); levels={n:0 for n in adj}; order=[]
+        ready=[n for n,d in degree.items() if d==0];heapq.heapify(ready);levels={n:0 for n in adj};order=[]
         while ready:
-            n=ready.pop(0); order.append(n)
+            n=heapq.heappop(ready);order.append(n)
             for target in adj[n]:
                 levels[target]=max(levels[target],levels[n]+1); degree[target]-=1
-                if degree[target]==0: ready.append(target); ready.sort()
+                if degree[target]==0:heapq.heappush(ready,target)
         return levels,order
 
     @staticmethod
     def _back_edges(pid,ids,adj,edges):
         state={}; pairs=set()
-        def visit(n):
-            state[n]=1
-            for target in adj[n]:
-                if state.get(target,0)==0: visit(target)
-                elif state.get(target)==1: pairs.add((n,target))
-            state[n]=2
-        for n in ids:
-            if state.get(n,0)==0: visit(n)
+        for root in ids:
+            if state.get(root,0)!=0:continue
+            state[root]=1;stack=[(root,0)]
+            while stack:
+                node,index=stack[-1]
+                if index<len(adj[node]):
+                    target=adj[node][index];stack[-1]=(node,index+1)
+                    if state.get(target,0)==0:state[target]=1;stack.append((target,0))
+                    elif state.get(target)==1:pairs.add((node,target))
+                else:
+                    state[node]=2;stack.pop()
         return [{"flow_id":fid,"source":s,"target":t,"process_id":pid} for fid,s,t in sorted(edges) if (s,t) in pairs]
 
     def _branches(self,pid,splits,types,adj,rev,levels):

@@ -1,6 +1,7 @@
 """Shared canonical v2 preparation used by compilation and repair."""
 from __future__ import annotations
 import copy
+import json
 import re
 import unicodedata
 from collections import Counter
@@ -207,12 +208,14 @@ class CanonicalWorkflowPreparer:
         messages=raw_messages if isinstance(raw_messages,list) else []
         node_by_id={n.get("id"):n for n in nodes if isinstance(n,Mapping) and isinstance(n.get("id"),str)}
         parallel_ids={i for i,n in node_by_id.items() if n.get("type")=="parallelGateway"}
-        deduped=[];pairs=set();used_ids=set()
+        deduped=[];pairs=set();used_ids=set();exact_messages=set()
         for raw in messages:
             if not isinstance(raw,Mapping):deduped.append(raw);continue
             message=dict(raw);pair=(message.get("source"),message.get("target"))
-            if any(isinstance(existing,Mapping) and existing==message for existing in deduped):
+            exact=json.dumps(message,ensure_ascii=False,sort_keys=True,separators=(",",":"),default=str)
+            if exact in exact_messages:
                 report.append(cls._entry("DUPLICATE_MESSAGE_FLOW_REMOVED","Duplicate message flow removed.",flow_id=message.get("id")));continue
+            exact_messages.add(exact)
             pairs.add(pair);identifier=str(message.get("id") or "")
             if not identifier or identifier in used_ids:identifier=cls._unique_id("message_flow_1",used_ids);message["id"]=identifier
             used_ids.add(identifier);deduped.append(message)
@@ -261,7 +264,7 @@ class CanonicalWorkflowPreparer:
             report.append(cls._entry(code,f"messageTask '{node_id}' normalized to {node['type']}.",node_id=node_id))
 
     @classmethod
-    def finalize_collaboration_process_structure(cls,workflow,report=None):
+    def finalize_collaboration_process_structure(cls,workflow,report=None,_repeat=True):
         """Complete locally unambiguous process chains around message endpoints.
 
         Message flows express collaboration causality, but never contribute a
@@ -360,8 +363,8 @@ class CanonicalWorkflowPreparer:
                     cls._add_technical_flow(flows,used_flow_ids,source,target,process_id,report,"COLLABORATION_CONTINUITY_FLOW_ADDED")
                     added=True;break
             if not added:break
-        if len(flows)>initial_flow_count:
-            return cls.finalize_collaboration_process_structure(workflow,report)
+        if _repeat and len(flows)>initial_flow_count:
+            return cls.finalize_collaboration_process_structure(workflow,report,False)
         return workflow
 
     @staticmethod
