@@ -67,6 +67,10 @@ class QwenWorkflowGenerator:
         self.model = model
         self.max_new_tokens = max_new_tokens
         self.enable_thinking = enable_thinking
+        self.last_generation_metadata: dict[str, Any] = {
+            "raw_text_length": 0, "json_extracted": False,
+            "parse_success": False, "cause": None,
+        }
 
     def generate_json(self, prompt: str) -> dict[str, Any]:
         """Run Qwen and return the JSON object extracted from its response."""
@@ -102,7 +106,17 @@ class QwenWorkflowGenerator:
             prompt_length = self._sequence_length(input_ids)
             generated_ids = outputs[0][prompt_length:] if prompt_length is not None else outputs[0]
             decoded = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
-            return extract_json_object(decoded)
+            self.last_generation_metadata = {
+                "raw_text_length": len(decoded), "json_extracted": False,
+                "parse_success": False, "cause": None,
+            }
+            try:
+                parsed = extract_json_object(decoded)
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                self.last_generation_metadata["cause"] = str(exc)
+                raise
+            self.last_generation_metadata.update(json_extracted=True,parse_success=True)
+            return parsed
         finally:
             # Release references between complete generation attempts. Cleanup is
             # best-effort and must never hide the original generation/OOM error.

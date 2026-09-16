@@ -65,7 +65,7 @@ class WorkflowNormalizer:
         used_ids: set[str] = set()
 
         processes, process_ids = self._normalize_processes(source, used_ids, report)
-        default_process = processes[0]["id"]
+        default_process = processes[0]["id"] if processes else None
         participants, participant_ids, participant_members, nested_lanes = self._normalize_participants(
             source, processes, process_ids, default_process, is_v2, used_ids, report
         )
@@ -116,7 +116,7 @@ class WorkflowNormalizer:
             "nodes", "flows", "messageFlows", "message_flows", "messages", "ambiguities",
         }
         self._unknown(source, allowed, "", report)
-        return {
+        normalized = {
             "schemaVersion": output_version,
             "processes": processes,
             "participants": participants,
@@ -125,7 +125,19 @@ class WorkflowNormalizer:
             "flows": flows,
             "messageFlows": message_flows,
             "ambiguities": ambiguities,
-        }, report
+        }
+        self._assert_no_collection_loss(source,normalized)
+        return normalized, report
+
+    @staticmethod
+    def _assert_no_collection_loss(source,normalized):
+        """Reject complete disappearance of populated structural collections."""
+        aliases={"processes":("processes",),"participants":("participants","pools"),
+                 "nodes":("nodes",),"flows":("flows",)}
+        for target,keys in aliases.items():
+            raw=next((source.get(key) for key in keys if isinstance(source.get(key),list)),None)
+            if isinstance(raw,list) and raw and not normalized.get(target):
+                raise ValueError(f"La normalisation a supprimé tous les éléments de '{target}'.")
 
     def _normalize_processes(self, source, used_ids, report):
         raw = source.get("processes")
@@ -145,7 +157,9 @@ class WorkflowNormalizer:
                 "properties": self._properties(item),
             })
             self._unknown(item, {"id", "name", "description", "executable", "properties", "participantId"}, f"processes[{index}]", report)
-        if not result:
+        has_structure=any(isinstance(source.get(key),list) and source.get(key)
+                          for key in ("nodes","flows","participants","pools","lanes"))
+        if not result and has_structure:
             identifier = self._assign_id(None, "process", used_ids, report, "processes[0].id")
             result.append({"id": identifier, "name": self._name(identifier), "description": "", "executable": False, "properties": {}})
         return result, references

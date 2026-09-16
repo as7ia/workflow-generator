@@ -86,17 +86,30 @@ class WorkflowCompiler:
             if not isinstance(raw, Mapping):
                 raise TypeError("Le générateur doit retourner un dictionnaire JSON.")
             result["raw_workflow"] = copy.deepcopy(dict(raw))
+            result["pipeline_debug"]["generation"] = self._generation_metadata(True)
+            result["pipeline_debug"]["after_qwen_parse"] = self._workflow_counts(raw)
         except Exception as exc:
+            result["pipeline_debug"]["generation"] = self._generation_metadata(False,exc)
             return self._fail(result, "generation", exc)
+
+        if not self.is_meaningful_workflow(raw):
+            return self._fail(result,"generation","La génération n'a produit aucun workflow exploitable.")
 
         preparer = CanonicalWorkflowPreparer(schema)
         try:
-            prepared = preparer.prepare_and_validate(dict(raw))
+            normalized,normalization_report=self._normalizer.normalize_with_report(dict(raw))
+            result["pipeline_debug"]["after_normalization"] = self._workflow_counts(normalized)
+            if not self.is_meaningful_workflow(normalized):
+                return self._fail(result,"generation","La génération n'a produit aucun workflow exploitable.")
+            prepared = preparer.prepare_and_validate(normalized)
             current_workflow = copy.deepcopy(prepared["workflow"])
+            self._assert_initial_prepare_preserved(normalized,current_workflow)
+            if not self.is_meaningful_workflow(current_workflow):
+                return self._fail(result,"generation","La génération n'a produit aucun workflow exploitable.")
             result["normalized_workflow"] = copy.deepcopy(current_workflow)
             result["pipeline_debug"]["after_initial_prepare"] = self._workflow_counts(current_workflow)
             result["warnings"].extend(
-                entry for entry in prepared["normalization_report"] if entry.get("severity") == "warning"
+                entry for entry in [*normalization_report,*prepared["normalization_report"]] if entry.get("severity") == "warning"
             )
             result["warnings"].extend(prepared["safe_repair_report"])
         except Exception as exc:
@@ -279,6 +292,9 @@ class WorkflowCompiler:
             "warnings": [],
             "error": None,
             "pipeline_debug": {
+                "generation": {"raw_text_length": None,"json_extracted": False,"parse_success": False},
+                "after_qwen_parse": None,
+                "after_normalization": None,
                 "after_initial_prepare": None,
                 "after_structural_repair": None,
                 "before_coverage_validation": None,
@@ -293,6 +309,38 @@ class WorkflowCompiler:
             key: len(workflow.get(key, [])) if isinstance(workflow.get(key), list) else 0
             for key in ("processes", "participants", "lanes", "nodes", "flows", "messageFlows")
         }
+
+    @staticmethod
+    def is_meaningful_workflow(workflow: Mapping[str,Any]) -> bool:
+        """Return whether generation contains at least one real BPMN node."""
+        if not isinstance(workflow,Mapping):return False
+        nodes=workflow.get("nodes")
+        return (isinstance(nodes,list) and bool(nodes) and
+                any(isinstance(node,Mapping) and isinstance(node.get("type"),str) and node["type"].strip()
+                    for node in nodes))
+
+    def _generation_metadata(self,success:bool,cause:Exception|None=None)->dict[str,Any]:
+        metadata=getattr(self.generator,"last_generation_metadata",None)
+        result=copy.deepcopy(dict(metadata)) if isinstance(metadata,Mapping) else {}
+        result.setdefault("raw_text_length",None)
+        result["json_extracted"]=bool(result.get("json_extracted",success))
+        result["parse_success"]=bool(result.get("parse_success",success))
+        if cause is not None:
+            result["json_extracted"]=False;result["parse_success"]=False
+            result["cause"]=str(cause)
+        return result
+
+    @classmethod
+    def _assert_initial_prepare_preserved(cls,before:Mapping[str,Any],after:Mapping[str,Any])->None:
+        """Fail if initial preparation silently erases existing structure."""
+        previous=cls._workflow_counts(before);current=cls._workflow_counts(after)
+        for key in ("nodes","participants"):
+            if previous[key] and not current[key]:
+                raise ValueError(f"La préparation initiale a supprimé tous les éléments de '{key}'.")
+        previous_edges=previous["flows"]+previous["messageFlows"]
+        current_edges=current["flows"]+current["messageFlows"]
+        if previous_edges and not current_edges:
+            raise ValueError("La préparation initiale a supprimé tous les flux.")
 
     @classmethod
     def is_catastrophic_regression(
