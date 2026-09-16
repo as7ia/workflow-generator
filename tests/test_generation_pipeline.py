@@ -83,7 +83,9 @@ def test_coverage_error_is_repaired_with_description_and_requirements():
     g=CoverageGenerator(empty_requirements(timers=[{"duration":"P2D"}]),missing,covered);c=WorkflowCompiler(g,SCHEMA);c._bpmn_generator=Xml()
     result=c.compile("wait two days")
     assert result["success"] and result["coverage_errors"]==[] and result["semantic_requirements"]["timers"]==[{"kind":"duration","value":"P2D"}]
-    assert len(g.prompts)==2 and "wait two days" in g.prompts[1] and "P2D" in g.prompts[1]
+    assert len(g.prompts)==2 and "MISSING_TIMER" in g.prompts[1] and "P2D" in g.prompts[1]
+    assert "JSON Schema officiel" not in g.prompts[1] and "ambiguities" in g.prompts[1]
+    assert result["repair_report"][-1]["coverage_repair"]["accepted_candidate"] is True
 
 def test_coverage_warnings_do_not_block_compilation():
     g=CoverageGenerator(empty_requirements(ambiguities=[{"message":"unclear optional role"}]),v2());c=WorkflowCompiler(g,SCHEMA);c._bpmn_generator=Xml()

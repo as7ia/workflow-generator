@@ -72,3 +72,17 @@ def test_lane_context_interaction_matches_participants_not_node_names():
     w["messageFlows"]=[{"id":"m","source":"send_payment","target":"receive_file","properties":{}}]
     req=requirements(lanes=[{"name":"Finance","participant":"Company"}],interactions=[{"source":"Company","target":"Bank","sourceLane":"Finance"}])
     assert not CoverageValidator().validate(req,w)
+
+def test_participants_match_normalized_names_not_only_ids():
+    w=workflow();w["participants"]=[
+        {"id":"pool_customer","name":"Client","processRef":"p","properties":{}},
+        {"id":"pool_company","name":"Entreprise","processRef":"p2","properties":{}},
+        {"id":"pool_bank","name":"Banque","processRef":"p3","properties":{}},
+    ]
+    req=requirements(participants=[{"name":"client"},{"name":"ENTREPRISE"},{"name":"Bánque !"}])
+    assert "MISSING_PARTICIPANT" not in codes(req,w)
+
+def test_empty_parallelism_is_not_a_blocking_requirement():
+    normalized,_=normalize_semantic_requirements({"parallelisms":[{"branches":[]}]})
+    assert normalized["parallelisms"]==[]
+    assert "MISSING_PARALLELISM" not in codes(requirements(parallelisms=[{"branches":[]}]))

@@ -147,10 +147,11 @@ class WorkflowCompiler:
         blocking=self._blocking_errors(result["coverage_errors"])
         if blocking:
             try:
+                required_coverage=self._requirements_for_errors(requirements,blocking)
                 repairer=WorkflowRepairer(max_attempts=self.max_repair_attempts,schema=schema)
                 repaired_workflow,coverage_report=repairer.repair(
                     workflow=copy.deepcopy(normalized),errors=blocking,generator=self.generator,
-                    description=description,requirements=requirements)
+                    requirements=required_coverage,repair_kind="coverage")
                 prepared=preparer.prepare_and_validate(repaired_workflow);normalized=prepared["workflow"]
                 result["normalized_workflow"]=normalized;result["repair_report"].extend(coverage_report)
                 result["schema_errors"]=prepared["schema_errors"];result["semantic_errors"]=prepared["semantic_errors"]
@@ -274,6 +275,28 @@ class WorkflowCompiler:
             for error in group
             if error.get("severity", "error") == "error"
         ]
+
+    @staticmethod
+    def _requirements_for_errors(
+        requirements: dict[str, Any], errors: list[dict[str, Any]]
+    ) -> dict[str, list[Any]]:
+        """Keep only requirements referenced by blocking coverage errors."""
+        code_to_kind = {
+            "MISSING_PARTICIPANT": "participants", "MISSING_LANE": "lanes",
+            "MISSING_TIMER": "timers", "MISSING_PARALLELISM": "parallelisms",
+            "MISSING_DECISION": "decisions", "MISSING_INTERACTION": "interactions",
+            "MISSING_ACTIVITY": "activities",
+        }
+        selected = {kind: [] for kind in (
+            "participants", "lanes", "timers", "parallelisms", "decisions",
+            "interactions", "activities", "ambiguities",
+        )}
+        for error in errors:
+            kind = code_to_kind.get(error.get("code"))
+            requirement = error.get("requirement")
+            if kind and isinstance(requirement, Mapping) and requirement not in selected[kind]:
+                selected[kind].append(copy.deepcopy(dict(requirement)))
+        return selected
 
     def _apply_safe_repairs(
         self,

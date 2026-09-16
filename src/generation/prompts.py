@@ -62,3 +62,18 @@ def build_repair_prompt(workflow:dict[str,Any],errors:list[dict[str,Any]],schema
         "Pour MESSAGE_FLOW_WITHIN_SAME_PROCESS, sépare d'abord les processes des participants si nécessaire avant de modifier le messageFlow.\n"
         "Pour INVALID_TIMER_DURATION, utilise obligatoirement une durée ISO 8601.\n"
         "Connecte une tâche métier isolée; ne la supprime que si elle est démontrablement inutile. Retourne uniquement un objet JSON valide.")
+
+def build_coverage_repair_prompt(workflow:dict[str,Any],errors:list[dict[str,Any]],requirements:dict[str,Any])->str:
+    """Build the deliberately small prompt used for semantic coverage only."""
+    blocking=[]
+    for error in errors:
+        if not isinstance(error,dict) or error.get("severity","error")!="error":continue
+        blocking.append({key:error[key] for key in ("code","message","requirement") if key in error})
+    return (
+        "Corrige uniquement ces exigences manquantes dans le workflow existant. "
+        "Ne régénère pas le workflow et préserve tous ses processus, participants, nœuds et flux existants.\n\n"
+        f"Exigences sémantiques nécessaires:\n{json.dumps(requirements,ensure_ascii=False,indent=2,sort_keys=True)}\n\n"
+        f"Erreurs de couverture bloquantes:\n{json.dumps(blocking,ensure_ascii=False,indent=2,sort_keys=True)}\n\n"
+        f"Workflow actuel:\n{json.dumps(workflow,ensure_ascii=False,indent=2,sort_keys=True)}\n\n"
+        "Retourne uniquement l'objet JSON complet corrigé, sans Markdown ni explication."
+    )

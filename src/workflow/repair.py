@@ -53,6 +53,7 @@ class WorkflowRepairer:
         generator: WorkflowGeneratorProtocol,
         description: str | None = None,
         requirements: dict[str, Any] | None = None,
+        repair_kind: str = "structural",
     ) -> tuple[dict[str, Any], list[RepairAttempt]]:
         """Return the best repaired workflow and a report for every attempt.
 
@@ -64,7 +65,9 @@ class WorkflowRepairer:
         original = copy.deepcopy(workflow) if isinstance(workflow, Mapping) else {}
         prepared = self._preparer.prepare_and_validate(original)
         current = prepared["workflow"]
-        current_errors = [*prepared["errors"],*CoverageValidator().validate(requirements or {},current)]
+        current_structural = prepared["errors"]
+        current_coverage = CoverageValidator().validate(requirements or {},current)
+        current_errors = [*current_structural,*current_coverage]
         report: list[RepairAttempt] = []
 
         if self._is_valid(current_errors):
@@ -77,7 +80,9 @@ class WorkflowRepairer:
 
         for attempt in range(1, self.max_attempts + 1):
             input_errors = copy.deepcopy(prompt_errors)
-            prompt = self.build_repair_prompt(current, input_errors,description,requirements)
+            prompt = self.build_repair_prompt(
+                current, input_errors, description, requirements, repair_kind
+            )
             try:
                 generated = generator.generate_json(prompt)
             except Exception as exc:  # Generator implementations are external.
@@ -115,15 +120,19 @@ class WorkflowRepairer:
 
             prepared = self._preparer.prepare_and_validate(copy.deepcopy(dict(generated)))
             candidate = prepared["workflow"]
-            output_errors = [*prepared["errors"],*CoverageValidator().validate(requirements or {},candidate)]
+            candidate_structural=prepared["errors"]
+            candidate_coverage=CoverageValidator().validate(requirements or {},candidate)
+            output_errors = [*candidate_structural,*candidate_coverage]
             candidate_score = self._score(output_errors)
             current_score = self._score(current_errors)
-            accepted_candidate = candidate_score <= current_score
-            if candidate_score < best_score:
+            accepted_candidate = (self._coverage_candidate_acceptable(current,candidate,current_structural,candidate_structural,current_coverage,candidate_coverage)
+                                  if repair_kind=="coverage" else candidate_score<=current_score)
+            if accepted_candidate and candidate_score < best_score:
                 best = copy.deepcopy(candidate)
                 best_score = candidate_score
 
-            if self._is_valid(output_errors):
+            coverage_diagnostic=self._coverage_diagnostic(current_structural,candidate_structural,current_coverage,candidate_coverage,accepted_candidate) if repair_kind=="coverage" else None
+            if accepted_candidate and self._is_valid(output_errors):
                 report.append(
                     self._attempt(
                         attempt,
@@ -133,6 +142,7 @@ class WorkflowRepairer:
                         "Le workflow corrigé est valide.",
                         True,
                         self._error_count(current_errors),
+                        coverage_diagnostic,
                     )
                 )
                 return candidate, report
@@ -146,10 +156,13 @@ class WorkflowRepairer:
                     "Le workflow corrigé contient encore des erreurs.",
                     accepted_candidate,
                     self._error_count(current_errors),
+                    coverage_diagnostic,
                 )
             )
             if accepted_candidate:
                 current = candidate
+                current_structural=candidate_structural
+                current_coverage=candidate_coverage
                 current_errors = output_errors
             prompt_errors = current_errors
 
@@ -158,12 +171,15 @@ class WorkflowRepairer:
     def build_repair_prompt(
         self, workflow: dict[str, Any], errors: list[dict[str, Any]], description: str | None = None,
         requirements: dict[str, Any] | None = None,
+        repair_kind: str = "structural",
     ) -> str:
         """Build a strict JSON-only repair prompt containing structured errors."""
         try:
-            from ..generation.prompts import build_repair_prompt
+            from ..generation.prompts import build_coverage_repair_prompt, build_repair_prompt
         except ImportError:  # pragma: no cover - PYTHONPATH=src entry point.
-            from generation.prompts import build_repair_prompt
+            from generation.prompts import build_coverage_repair_prompt, build_repair_prompt
+        if repair_kind == "coverage":
+            return build_coverage_repair_prompt(workflow, errors, requirements or {})
         return build_repair_prompt(workflow, errors, self._schema, description, requirements)
         """Previous prompt implementation retained below temporarily unreachable."""
         error_lines = []
@@ -249,6 +265,7 @@ class WorkflowRepairer:
         message: str,
         accepted_candidate: bool = False,
         errors_before: int | None = None,
+        coverage_repair: dict[str, Any] | None = None,
     ) -> RepairAttempt:
         """Build one stable attempt report entry."""
         return {
@@ -260,11 +277,30 @@ class WorkflowRepairer:
             "accepted_candidate": accepted_candidate,
             "errors_before": errors_before if errors_before is not None else WorkflowRepairer._error_count(input_errors),
             "errors_after": WorkflowRepairer._error_count(output_errors),
+            **({"coverage_repair": copy.deepcopy(coverage_repair)} if coverage_repair is not None else {}),
         }
 
     @staticmethod
     def _error_count(errors: list[RepairError]) -> int:
         return sum(error.get("severity","error")=="error" for error in errors)
+
+    @classmethod
+    def _coverage_candidate_acceptable(cls,current,candidate,current_structural,candidate_structural,current_coverage,candidate_coverage):
+        for key in ("nodes","participants","processes"):
+            before=current.get(key,[]) if isinstance(current.get(key,[]),list) else []
+            after=candidate.get(key,[]) if isinstance(candidate.get(key,[]),list) else []
+            if before and not after:return False
+            if len(after)<len(before):return False
+        if cls._error_count(candidate_structural)>cls._error_count(current_structural):return False
+        before_unknown=sum(str(x.get("code","")).startswith("UNKNOWN_") for x in current_structural)
+        after_unknown=sum(str(x.get("code","")).startswith("UNKNOWN_") for x in candidate_structural)
+        return after_unknown<=before_unknown and cls._error_count(candidate_coverage)<cls._error_count(current_coverage)
+
+    @classmethod
+    def _coverage_diagnostic(cls,before_structure,after_structure,before_coverage,after_coverage,accepted):
+        return {"errors_before":cls._error_count(before_coverage),"errors_after":cls._error_count(after_coverage),
+                "structure_errors_before":cls._error_count(before_structure),"structure_errors_after":cls._error_count(after_structure),
+                "accepted_candidate":accepted}
 
     @staticmethod
     def _pipeline_error(code: str, message: str) -> RepairError:

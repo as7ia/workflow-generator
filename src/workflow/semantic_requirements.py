@@ -43,7 +43,9 @@ def normalize_semantic_requirements(raw):
         branches=item.get("branches") or ([{"activity":item["activity"]}] if item.get("activity") else [])
         key=_norm(item.get("name") or item.get("group") or "default")
         grouped.setdefault(key,[]).extend(branches)
-    for branches in grouped.values():parallelisms.append({"branches":_dedupe(branches,lambda x:_norm(x.get("activity")))})
+    for branches in grouped.values():
+        canonical_branches=_dedupe(branches,lambda x:_norm(x.get("activity")))
+        if len(canonical_branches)>=2:parallelisms.append({"branches":canonical_branches})
     decisions=[{"name":x.get("name",""),"outcomes":x.get("outcomes",[])} for x in collections["decisions"] if isinstance(x.get("outcomes"),list) and len(x["outcomes"])>=2]
     timer_activities={_norm(x.get("activity")) for x in timers if x.get("activity")}
     activities=_dedupe([x for x in collections["activities"] if _norm(x.get("name")) not in timer_activities],lambda x:_norm(x.get("name")))

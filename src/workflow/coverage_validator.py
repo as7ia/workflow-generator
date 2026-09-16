@@ -33,7 +33,10 @@ class CoverageValidator:
         parallels=[n for n in nodes if isinstance(n,Mapping) and n.get("type")=="parallelGateway" and len(outgoing.get(n.get("id"),[]))>=2]
         decisions=[n for n in nodes if isinstance(n,Mapping) and n.get("type") in {"exclusiveGateway","inclusiveGateway","eventBasedGateway"} and len(outgoing.get(n.get("id"),[]))>=2]
         for req in requirements.get("parallelisms",[]):
-            branches=[b.get("activity") for b in req.get("branches",[]) if isinstance(b,Mapping)]
+            raw_branches=req.get("branches") if "branches" in req else req.get("activities",[])
+            branches=[b.get("activity") if isinstance(b,Mapping) else b for b in raw_branches]
+            branches=[branch for branch in branches if branch]
+            if len(branches)<2:continue
             if not any(self._parallel_covers(g,branches,outgoing,node_by_id) for g in parallels):issues.append(self._missing("parallelisms",req))
         for req in requirements.get("decisions",[]):
             if not decisions:issues.append(self._missing("decisions",req))

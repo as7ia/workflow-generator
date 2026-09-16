@@ -1,5 +1,6 @@
 import copy
 from src.workflow import WorkflowRepairer,SemanticValidator
+from src.workflow.coverage_validator import CoverageValidator
 
 class Queue:
     def __init__(self,*items):self.items=list(items);self.prompts=[]
@@ -39,3 +40,45 @@ def test_generator_exception_reported():
     class Broken:
         def generate_json(self,prompt):raise RuntimeError("offline")
     _,report=WorkflowRepairer(1).repair(v1(False),ERROR,Broken());assert any(e["code"]=="GENERATOR_EXCEPTION" for e in report[0]["output_errors"])
+
+def canonical_three_processes():
+    processes=[];participants=[];nodes=[];flows=[]
+    for index,name in enumerate(("Client","Entreprise","Banque"),1):
+        process=f"p{index}";participant=f"participant_{index}"
+        processes.append({"id":process,"name":process,"description":"","executable":False,"properties":{}})
+        participants.append({"id":participant,"name":name,"processRef":process,"properties":{}})
+        local=[]
+        for suffix,node_type in (("s","startEvent"),("a","serviceTask"),("e","endEvent")):
+            node_id=f"{process}_{suffix}";local.append(node_id)
+            nodes.append({"id":node_id,"type":node_type,"name":node_id,"processRef":process,"participantRef":participant,"laneRef":None,"actor":None,"properties":{}})
+        flows.extend([
+            {"id":f"{process}_f1","source":local[0],"target":local[1],"processRef":process,"condition":None,"isDefault":False,"properties":{}},
+            {"id":f"{process}_f2","source":local[1],"target":local[2],"processRef":process,"condition":None,"isDefault":False,"properties":{}},
+        ])
+    nodes.insert(-1,{"id":"p3_b","type":"serviceTask","name":"p3_b","processRef":"p3","participantRef":"participant_3","laneRef":None,"actor":None,"properties":{}})
+    flows[-1:] = [
+        {"id":"p3_f2","source":"p3_a","target":"p3_b","processRef":"p3","condition":None,"isDefault":False,"properties":{}},
+        {"id":"p3_f3","source":"p3_b","target":"p3_e","processRef":"p3","condition":None,"isDefault":False,"properties":{}},
+    ]
+    return {"schemaVersion":"2.0","processes":processes,"participants":participants,"lanes":[],"nodes":nodes,"flows":flows,"messageFlows":[],"ambiguities":[]}
+
+def coverage_requirements():
+    return {**{k:[] for k in ("participants","lanes","timers","parallelisms","decisions","interactions","ambiguities")},"activities":[{"name":"Required coverage"}]}
+
+def test_coverage_repair_rejects_empty_candidate_and_preserves_current_workflow():
+    current=canonical_three_processes()
+    empty={"schemaVersion":"2.0","processes":[{"id":"p","name":"p","description":"","executable":False,"properties":{}}],"participants":[],"lanes":[],"nodes":[],"flows":[],"messageFlows":[],"ambiguities":[]}
+    errors=CoverageValidator().validate(coverage_requirements(),current)
+    result,report=WorkflowRepairer(1).repair(current,errors,Queue(empty),requirements=coverage_requirements(),repair_kind="coverage")
+    assert len(result["processes"])==3 and len(result["participants"])==3 and len(result["nodes"])==10
+    assert report[0]["coverage_repair"]["accepted_candidate"] is False
+
+def test_coverage_repair_rejects_candidate_with_more_structural_errors():
+    current=canonical_three_processes();candidate=copy.deepcopy(current)
+    candidate["nodes"].append({"id":"covered","type":"invalid","name":"Required coverage","processRef":"p1","participantRef":"participant_1","laneRef":None,"actor":None,"properties":{}})
+    candidate["flows"]=[]
+    requirements=coverage_requirements();errors=CoverageValidator().validate(requirements,current)
+    result,report=WorkflowRepairer(1).repair(current,errors,Queue(candidate),requirements=requirements,repair_kind="coverage")
+    diagnostic=report[0]["coverage_repair"]
+    assert result==current and diagnostic["errors_after"]<diagnostic["errors_before"]
+    assert diagnostic["structure_errors_after"]>diagnostic["structure_errors_before"] and diagnostic["accepted_candidate"] is False
