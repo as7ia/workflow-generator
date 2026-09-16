@@ -101,7 +101,7 @@ class WorkflowCompiler:
             result["pipeline_debug"]["after_normalization"] = self._workflow_counts(normalized)
             if not self.is_meaningful_workflow(normalized):
                 return self._fail(result,"generation","La génération n'a produit aucun workflow exploitable.")
-            prepared = preparer.prepare_and_validate(normalized)
+            prepared = preparer.prepare_normalized_and_validate(normalized,normalization_report)
             current_workflow = copy.deepcopy(prepared["workflow"])
             self._assert_initial_prepare_preserved(normalized,current_workflow)
             if not self.is_meaningful_workflow(current_workflow):
@@ -109,7 +109,7 @@ class WorkflowCompiler:
             result["normalized_workflow"] = copy.deepcopy(current_workflow)
             result["pipeline_debug"]["after_initial_prepare"] = self._workflow_counts(current_workflow)
             result["warnings"].extend(
-                entry for entry in [*normalization_report,*prepared["normalization_report"]] if entry.get("severity") == "warning"
+                entry for entry in prepared["normalization_report"] if entry.get("severity") == "warning"
             )
             result["warnings"].extend(prepared["safe_repair_report"])
         except Exception as exc:
@@ -131,8 +131,9 @@ class WorkflowCompiler:
                     workflow=current_workflow,
                     errors=blocking,
                     generator=self.generator,
+                    workflow_is_prepared=True,
                 )
-                prepared = preparer.prepare_and_validate(repaired_workflow)
+                prepared = preparer.validate_prepared(repaired_workflow)
                 accepted_workflow = copy.deepcopy(prepared["workflow"])
                 result["warnings"].extend(
                     entry
@@ -146,13 +147,13 @@ class WorkflowCompiler:
                 blocking = self._blocking_errors(
                     result["schema_errors"], result["semantic_errors"]
                 )
-                if not blocking:
-                    current_workflow = accepted_workflow
-                    result["normalized_workflow"] = copy.deepcopy(current_workflow)
-                    result["pipeline_debug"]["after_structural_repair"] = self._workflow_counts(current_workflow)
+                current_workflow = accepted_workflow
+                result["normalized_workflow"] = copy.deepcopy(current_workflow)
+                result["pipeline_debug"]["after_structural_repair"] = self._workflow_counts(current_workflow)
             except Exception as exc:
                 return self._fail(result, "repair", exc)
             if blocking:
+                result["pipeline_debug"]["final_current_workflow"] = self._workflow_counts(current_workflow)
                 result["error"] = {
                     "stage": "repair",
                     "message": "Le meilleur workflow obtenu reste invalide après les tentatives de réparation.",
@@ -170,8 +171,8 @@ class WorkflowCompiler:
                 repairer=WorkflowRepairer(max_attempts=self.max_repair_attempts,schema=schema)
                 coverage_candidate,coverage_report=repairer.repair(
                     workflow=copy.deepcopy(base_workflow),errors=blocking,generator=self.generator,
-                    requirements=required_coverage,repair_kind="coverage")
-                candidate_prepared=preparer.prepare_and_validate(coverage_candidate)
+                    requirements=required_coverage,repair_kind="coverage",workflow_is_prepared=True)
+                candidate_prepared=preparer.validate_prepared(coverage_candidate)
                 candidate_workflow=candidate_prepared["workflow"]
                 attempted_counts=next((
                     attempt.get("coverage_repair",{}).get("candidate_counts")
@@ -190,7 +191,7 @@ class WorkflowCompiler:
                     current_workflow=copy.deepcopy(candidate_workflow)
                 else:
                     current_workflow=base_workflow
-                prepared=preparer.prepare_and_validate(current_workflow)
+                prepared=preparer.validate_prepared(current_workflow)
                 current_workflow=copy.deepcopy(prepared["workflow"])
                 result["normalized_workflow"]=copy.deepcopy(current_workflow)
                 result["schema_errors"]=prepared["schema_errors"];result["semantic_errors"]=prepared["semantic_errors"]
@@ -206,6 +207,7 @@ class WorkflowCompiler:
                 result["error"]={"stage":"coverage_repair","message":"Le workflow ne couvre pas encore toutes les exigences."}
                 return result
 
+        result["pipeline_debug"]["final_current_workflow"] = self._workflow_counts(current_workflow)
         try:
             result["analysis"] = self._analyzer.analyze(current_workflow)
         except Exception as exc:

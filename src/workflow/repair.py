@@ -38,10 +38,10 @@ class WorkflowRepairer:
     MAX_ATTEMPTS = 3
 
     def __init__(self, max_attempts: int | None = None, schema: dict[str, Any] | None = None) -> None:
-        """Create a repairer with an optional positive attempt limit."""
+        """Create a repairer with an optional non-negative attempt limit."""
         limit = self.MAX_ATTEMPTS if max_attempts is None else max_attempts
-        if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
-            raise ValueError("max_attempts doit être un entier strictement positif")
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit < 0:
+            raise ValueError("max_attempts doit être un entier positif ou nul")
         self.max_attempts = limit
         self._schema = copy.deepcopy(schema) if isinstance(schema, dict) else self._load_effective_schema()
         self._preparer = CanonicalWorkflowPreparer(self._schema)
@@ -54,6 +54,7 @@ class WorkflowRepairer:
         description: str | None = None,
         requirements: dict[str, Any] | None = None,
         repair_kind: str = "structural",
+        workflow_is_prepared: bool = False,
     ) -> tuple[dict[str, Any], list[RepairAttempt]]:
         """Return the best repaired workflow and a report for every attempt.
 
@@ -63,7 +64,8 @@ class WorkflowRepairer:
         such as intentional loops, do not trigger another repair.
         """
         original = copy.deepcopy(workflow) if isinstance(workflow, Mapping) else {}
-        prepared = self._preparer.prepare_and_validate(original)
+        prepared = (self._preparer.validate_prepared(original) if workflow_is_prepared
+                    else self._preparer.prepare_and_validate(original))
         current = prepared["workflow"]
         current_structural = prepared["errors"]
         current_coverage = CoverageValidator().validate(requirements or {},current)
@@ -126,7 +128,7 @@ class WorkflowRepairer:
             candidate_score = self._score(output_errors)
             current_score = self._score(current_errors)
             accepted_candidate = (self._coverage_candidate_acceptable(current,candidate,current_structural,candidate_structural,current_coverage,candidate_coverage)
-                                  if repair_kind=="coverage" else candidate_score<=current_score)
+                                  if repair_kind=="coverage" else candidate_score<current_score)
             if accepted_candidate and candidate_score < best_score:
                 best = copy.deepcopy(candidate)
                 best_score = candidate_score

@@ -19,7 +19,19 @@ class CanonicalWorkflowPreparer:
     def prepare_and_validate(self,workflow:dict[str,Any])->dict[str,Any]:
         """Run the sole normalize -> safe repair -> schema -> semantic chain."""
         normalized,normalization_report=self.normalizer.normalize_with_report(copy.deepcopy(workflow))
-        prepared,safe_report=self.apply_safe_repairs(normalized)
+        return self.prepare_normalized_and_validate(normalized,normalization_report)
+
+    def prepare_normalized_and_validate(self,workflow:dict[str,Any],normalization_report=None)->dict[str,Any]:
+        """Apply safe repairs and validations to an already canonical workflow."""
+        prepared,safe_report=self.apply_safe_repairs(workflow)
+        return self._validate_prepared(prepared,normalization_report or [],safe_report)
+
+    def validate_prepared(self,workflow:dict[str,Any])->dict[str,Any]:
+        """Validate a workflow already normalized and safely repaired."""
+        prepared=copy.deepcopy(workflow) if isinstance(workflow,Mapping) else {}
+        return self._validate_prepared(prepared,[],[])
+
+    def _validate_prepared(self,prepared,normalization_report,safe_report):
         from .repair import _StandardSchemaValidator
         schema_errors=_StandardSchemaValidator(self.schema).validate(prepared)
         semantic_errors=self.semantic.validate(prepared)
@@ -204,6 +216,7 @@ class CanonicalWorkflowPreparer:
         participants=workflow.get("participants",[])
         processes=workflow.get("processes",[])
         if not all(isinstance(value,list) for value in (nodes,flows,messages,processes)):return workflow
+        initial_flow_count=len(flows)
         used_node_ids={n.get("id") for n in nodes if isinstance(n,Mapping)}
         used_flow_ids={f.get("id") for f in flows if isinstance(f,Mapping)}
         message_endpoints={endpoint for m in messages if isinstance(m,Mapping) for endpoint in (m.get("source"),m.get("target"))}
@@ -293,6 +306,8 @@ class CanonicalWorkflowPreparer:
                     cls._add_technical_flow(flows,used_flow_ids,source,target,process_id,report,"COLLABORATION_CONTINUITY_FLOW_ADDED")
                     added=True;break
             if not added:break
+        if len(flows)>initial_flow_count:
+            return cls.finalize_collaboration_process_structure(workflow,report)
         return workflow
 
     @staticmethod

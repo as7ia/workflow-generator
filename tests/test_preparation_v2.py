@@ -14,6 +14,12 @@ def test_preparation_is_immutable():
     value=base();before=copy.deepcopy(value);CanonicalWorkflowPreparer(SCHEMA).prepare(value);assert value==before
 def test_safe_repair_is_immutable():
     value=base();before=copy.deepcopy(value);CanonicalWorkflowPreparer.apply_safe_repairs(value);assert value==before
+def test_preparing_an_already_canonical_workflow_is_idempotent():
+    preparer=CanonicalWorkflowPreparer(SCHEMA);first=preparer.prepare_and_validate(base())["workflow"]
+    second=preparer.prepare_normalized_and_validate(first)["workflow"]
+    assert second==first
+    assert {key:len(second[key]) for key in ("participants","nodes","flows")}=={
+        key:len(first[key]) for key in ("participants","nodes","flows")}
 def test_isolated_business_task_not_deleted():
     value=base();value["nodes"].append({"id":"business","type":"userTask","name":"Approve","processRef":"p","participantRef":None,"laneRef":None,"actor":"manager","properties":{}});fixed,_=CanonicalWorkflowPreparer.apply_safe_repairs(value);assert "business" in {n["id"] for n in fixed["nodes"]}
 def test_generation_prompt_requires_process_ownership():

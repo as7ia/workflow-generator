@@ -32,6 +32,18 @@ def test_valid_does_not_call_repair():
     c=compiler(v2());result=c.compile("x");assert result["repair_report"]==[] and len(c.generator.prompts)==1
 def test_invalid_calls_repair():
     bad=v2(nodes=[n("s",t="startEvent"),n("t")],flows=[f("f","s","t")]);c=compiler(bad,v2());result=c.compile("x");assert result["success"] and len(c.generator.prompts)==2
+def test_zero_repair_attempts_never_calls_generator_for_repair():
+    bad=v2(nodes=[n("s",t="startEvent"),n("t")],flows=[f("f","s","t")]);g=Generator(bad)
+    c=WorkflowCompiler(g,SCHEMA,max_repair_attempts=0);c._bpmn_generator=Xml();result=c.compile("x")
+    assert result["error"]["stage"]=="repair" and len(g.prompts)==1 and result["repair_report"]==[]
+    assert result["pipeline_debug"]["after_structural_repair"]==result["pipeline_debug"]["final_current_workflow"]
+def test_partially_improved_structural_candidate_becomes_current_source_of_truth():
+    broken=v2(nodes=[n("s",t="startEvent"),n("t")],flows=[])
+    improved=v2(nodes=[n("s",t="startEvent"),n("t")],flows=[f("f","s","t")])
+    c=WorkflowCompiler(Generator(broken,improved),SCHEMA,max_repair_attempts=1);c._bpmn_generator=Xml();result=c.compile("x")
+    assert result["error"]["stage"]=="repair"
+    assert {(item["source"],item["target"]) for item in result["normalized_workflow"]["flows"]}=={("s","t")}
+    assert result["pipeline_debug"]["after_structural_repair"]==result["pipeline_debug"]["final_current_workflow"]
 def test_repair_uses_safe_repairs():
     bad=v2(nodes=[n("s",t="startEvent"),n("g",t="parallelGateway"),n("e",t="endEvent")],flows=[f("1","s","g"),f("2","g","e","p1","x")]);result=compiler(bad).compile("x");assert result["normalized_workflow"]["flows"][1]["condition"] is None
 def test_cross_process_sequence_becomes_message():
@@ -91,6 +103,11 @@ def test_coverage_warnings_do_not_block_compilation():
     g=CoverageGenerator(empty_requirements(ambiguities=[{"message":"unclear optional role"}]),v2());c=WorkflowCompiler(g,SCHEMA);c._bpmn_generator=Xml()
     result=c.compile("valid but ambiguous")
     assert result["success"] and any(x["code"]=="SEMANTIC_AMBIGUITY" for x in result["coverage_errors"]) and len(g.prompts)==1
+
+def test_zero_repair_attempts_never_calls_generator_for_coverage_repair():
+    g=CoverageGenerator(empty_requirements(timers=[{"duration":"P2D"}]),v2())
+    c=WorkflowCompiler(g,SCHEMA,max_repair_attempts=0);c._bpmn_generator=Xml();result=c.compile("wait two days")
+    assert result["error"]["stage"]=="coverage_repair" and len(g.prompts)==1 and result["repair_report"]==[]
 
 def test_structural_repair_precedes_coverage_repair():
     broken=v2(nodes=[n("s",t="startEvent"),n("t")],flows=[f("f","s","t")])

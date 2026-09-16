@@ -77,3 +77,14 @@ def test_normalizer_reports_total_collection_loss_as_error():
     value=v2(nodes=[None for _ in range(10)],flows=[])
     with pytest.raises(ValueError,match="nodes"):
         WorkflowNormalizer().normalize_with_report(value)
+
+
+def test_main_pipeline_normalizes_initial_workflow_once(monkeypatch):
+    calls=0;original=WorkflowNormalizer.normalize_with_report
+    def counted(self,value):
+        nonlocal calls
+        calls+=1
+        return original(self,value)
+    monkeypatch.setattr(WorkflowNormalizer,"normalize_with_report",counted)
+    _,result=compile_value(v2())
+    assert result["success"] and calls==1

@@ -26,6 +26,14 @@ def test_generated_candidate_runs_safe_repairs():
 def test_initial_candidate_can_remain_best():
     worse={"schemaVersion":"2.0","processes":[{"id":"p","name":"P","description":"","executable":False,"properties":{}}],"participants":[],"lanes":[],"nodes":[{"id":f"x{i}","type":"invalid","name":"X","processRef":"p","participantRef":None,"laneRef":None,"actor":None,"properties":{}} for i in range(10)],"flows":[],"messageFlows":[],"ambiguities":[]}
     result,report=WorkflowRepairer(1).repair(v1(False),ERROR,Queue(worse));assert result["schemaVersion"]=="2.0" and result["nodes"] and report[0]["accepted_candidate"] is False and report[0]["errors_after"]>report[0]["errors_before"]
+def test_equal_score_candidate_is_rejected_and_previous_workflow_is_kept():
+    original=v1(False);candidate=copy.deepcopy(original);candidate["nodes"][1]["name"]="Changed without improvement"
+    result,report=WorkflowRepairer(1).repair(original,ERROR,Queue(candidate))
+    assert result["nodes"][1]["name"]=="T" and report[0]["accepted_candidate"] is False
+    assert report[0]["errors_after"]==report[0]["errors_before"]
+def test_zero_attempts_returns_prepared_workflow_without_generator_call():
+    queue=Queue();result,report=WorkflowRepairer(0).repair(v1(False),ERROR,queue)
+    assert result["schemaVersion"]=="2.0" and report==[] and queue.prompts==[]
 def test_input_immutable():
     original=v1(False);before=copy.deepcopy(original);WorkflowRepairer().repair(original,ERROR,Queue(v1()));assert original==before
 def test_prompt_teaches_v2_only():
