@@ -16,11 +16,13 @@ def normalize_semantic_requirements(raw):
     issues=[];source=dict(raw) if isinstance(raw,Mapping) else {}
     if not isinstance(raw,Mapping):issues.append(_issue("INVALID_SEMANTIC_REQUIREMENTS","Requirements must be an object.","error"))
     collections={k:_items(source.get(k,[]),k,issues) for k in KEYS}
-    participants=_dedupe(collections["participants"],lambda x:_norm(x.get("name")))
+    ambiguities=list(collections["ambiguities"])
+    participants=_dedupe([{"name":x.get("name","")} for x in collections["participants"] if _norm(x.get("name"))],lambda x:_norm(x.get("name")))
     participant_names=[x.get("name","") for x in participants]
     lanes=[]
     for item in collections["lanes"]:
-        if not item.get("participant"):continue
+        if not _norm(item.get("name")) or not _norm(item.get("participant")):
+            ambiguities.append({"message":"Incomplete lane requirement.","requirement":item});continue
         lanes.append({"name":item.get("name",""),"participant":item["participant"]})
     lanes=_dedupe(lanes,lambda x:(_norm(x["participant"]),_norm(x["name"])))
     lane_lookup={_norm(x["name"]):x for x in lanes}
@@ -32,12 +34,17 @@ def normalize_semantic_requirements(raw):
             normalized[side]=actor
             if lane:normalized[side+"Lane"]=lane
             elif item.get(side+"Lane"):normalized[side+"Lane"]=item[side+"Lane"]
+        if not _norm(normalized.get("source")) or not _norm(normalized.get("target")):
+            ambiguities.append({"message":"Incomplete interaction requirement.","requirement":item});continue
         interactions.append(normalized)
     interactions=_dedupe(interactions,lambda x:tuple(_norm(x.get(k)) for k in ("source","target","sourceLane","targetLane")))
     timers=[]
     for item in collections["timers"]:
         value=item.get("value") or item.get("duration") or item.get("name")
-        timers.append({k:v for k,v in {"kind":item.get("kind","duration"),"value":_duration(value),"activity":item.get("activity")}.items() if v})
+        kind=str(item.get("kind","duration")).lower();canonical_value=_duration(value) if kind=="duration" else str(value or "").strip()
+        if kind not in {"duration","date","cycle"} or not _valid_timer_value(kind,canonical_value):
+            ambiguities.append({"message":"Malformed timer requirement.","requirement":item});continue
+        timers.append({k:v for k,v in {"kind":kind,"value":canonical_value,"activity":item.get("activity")}.items() if v})
     parallelisms=[];grouped={}
     for item in collections["parallelisms"]:
         branches=item.get("branches") or ([{"activity":item["activity"]}] if item.get("activity") else [])
@@ -46,15 +53,21 @@ def normalize_semantic_requirements(raw):
     for branches in grouped.values():
         canonical_branches=_dedupe(branches,lambda x:_norm(x.get("activity")))
         if len(canonical_branches)>=2:parallelisms.append({"branches":canonical_branches})
-    decisions=[{"name":x.get("name",""),"outcomes":x.get("outcomes",[])} for x in collections["decisions"] if isinstance(x.get("outcomes"),list) and len(x["outcomes"])>=2]
+        else:ambiguities.append({"message":"Parallelism requires at least two branches.","requirement":{"branches":branches}})
+    decisions=[]
+    for item in collections["decisions"]:
+        outcomes=_dedupe([str(value).strip() for value in item.get("outcomes",[]) if str(value).strip()],_norm) if isinstance(item.get("outcomes"),list) else []
+        if not _norm(item.get("name")) or len(outcomes)<2:
+            ambiguities.append({"message":"Decision requires a name and at least two outcomes.","requirement":item});continue
+        decisions.append({"name":item["name"],"outcomes":outcomes})
     timer_activities={_norm(x.get("activity")) for x in timers if x.get("activity")}
-    activities=_dedupe([x for x in collections["activities"] if _norm(x.get("name")) not in timer_activities],lambda x:_norm(x.get("name")))
+    activities=_dedupe([{"name":x.get("name","")} for x in collections["activities"] if _norm(x.get("name")) and _norm(x.get("name")) not in timer_activities],lambda x:_norm(x.get("name")))
     result={"participants":participants,"lanes":lanes,"timers":_dedupe(timers,lambda x:(x.get("kind"),x.get("value"),_norm(x.get("activity")))),
             "parallelisms":parallelisms,"decisions":_dedupe(decisions,lambda x:(_norm(x["name"]),tuple(_norm(v) for v in x["outcomes"]))),
-            "interactions":interactions,"activities":activities,"ambiguities":_dedupe(collections["ambiguities"],lambda x:_norm(x.get("message") or x.get("name")))}
+            "interactions":interactions,"activities":activities,"ambiguities":_dedupe(ambiguities,lambda x:_norm(x.get("message") or x.get("name") or x.get("requirement")))}
     return SemanticRequirements(**result).to_dict(),issues
 def _items(value,key,issues):
-    if not isinstance(value,list):issues.append(_issue("INVALID_REQUIREMENT_COLLECTION",f"'{key}' must be a list.","error"));return []
+    if not isinstance(value,list):issues.append(_issue("INVALID_REQUIREMENT_COLLECTION",f"'{key}' must be a list.","warning"));return []
     return [{"name":x.strip()} if isinstance(x,str) else copy.deepcopy(dict(x)) for x in value if isinstance(x,(str,Mapping))]
 def _split_actor(value,participants,lanes):
     text=str(value or "").strip();match=re.match(r"^(.*?)\s*\((.*?)\)\s*$",text)
@@ -68,10 +81,17 @@ def _dedupe(items,key):
         marker=key(item)
         if marker and marker not in seen:seen.add(marker);result.append(item)
     return result
-def _norm(value):return " ".join(re.findall(r"[a-z0-9]+",unicodedata.normalize("NFKD",str(value or "")).encode("ascii","ignore").decode().lower()))
+def _norm(value):
+    tokens=re.findall(r"[a-z0-9]+",unicodedata.normalize("NFKD",str(value or "")).encode("ascii","ignore").decode().lower())
+    return " ".join(token[:-1] if len(token)>4 and token.endswith(("s","r")) else token for token in tokens)
 def _duration(value):
     match=re.fullmatch(r"\s*(\d+)\s*(jour|jours|day|days|heure|heures|hour|hours|minute|minutes)\s*",str(value or ""),re.I)
     if not match:return str(value or "")
     amount=int(match.group(1));unit=match.group(2).lower()
     return f"P{amount}D" if unit.startswith(("j","d")) else f"PT{amount}{'H' if unit.startswith(('h','heure')) else 'M'}"
+def _valid_timer_value(kind,value):
+    text=str(value or "").strip()
+    if kind=="duration":return bool(re.fullmatch(r"P(?=.+)(?:\d+(?:\.\d+)?[YMWD])*(?:T(?:\d+(?:\.\d+)?[HMS])+)?",text))
+    if kind=="date":return bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:T[^\s]+)?",text))
+    return bool(re.fullmatch(r"R\d*/P.+",text))
 def _issue(code,message,severity):return {"code":code,"message":message,"severity":severity}

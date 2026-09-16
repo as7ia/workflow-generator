@@ -86,3 +86,65 @@ def test_empty_parallelism_is_not_a_blocking_requirement():
     normalized,_=normalize_semantic_requirements({"parallelisms":[{"branches":[]}]})
     assert normalized["parallelisms"]==[]
     assert "MISSING_PARALLELISM" not in codes(requirements(parallelisms=[{"branches":[]}]))
+
+def test_lane_with_same_name_under_wrong_participant_is_missing():
+    assert "MISSING_LANE" in codes(requirements(lanes=[{"name":"Reviewer","participant":"Actor B"}]))
+
+def test_timer_requires_kind_and_value_and_reports_closest_timer_node():
+    issues=CoverageValidator().validate(requirements(timers=[{"kind":"date","value":"P2D"}]),workflow())
+    missing=next(issue for issue in issues if issue["code"]=="MISSING_TIMER")
+    assert missing["related_node_ids"]==["timer"]
+
+def test_same_duration_can_be_matched_in_distinct_activity_contexts():
+    w=workflow();w["nodes"].append(node("timer_other","Wait other","intermediateCatchEvent","pa",{"timer":{"kind":"duration","value":"P2D"}}))
+    req=requirements(timers=[{"kind":"duration","value":"P2D","activity":"Wait other"}])
+    assert "MISSING_TIMER" not in codes(req,w)
+
+def test_timer_activity_does_not_create_duplicate_missing_activity():
+    req=requirements(timers=[{"kind":"duration","value":"P3D","activity":"Wait three days"}],activities=[{"name":"Wait three days"}])
+    result=CoverageValidator().validate(req,workflow())
+    assert [issue["code"] for issue in result].count("MISSING_TIMER")==1
+    assert "MISSING_ACTIVITY" not in {issue["code"] for issue in result}
+
+def test_decision_requires_matching_gateway_and_distinct_outcomes():
+    w=workflow();gateway=next(item for item in w["nodes"] if item["id"]=="decision");gateway["name"]="Completeness"
+    decision_flows=[item for item in w["flows"] if item["source"]=="decision"]
+    decision_flows[0]["condition"]="complete";decision_flows[1]["condition"]="incomplete"
+    req=requirements(decisions=[{"name":"Completeness","outcomes":["complete","incomplete"]}])
+    assert "MISSING_DECISION" not in codes(req,w)
+    unrelated=requirements(decisions=[{"name":"Payment decision","outcomes":["paid","unpaid"]}])
+    assert "MISSING_DECISION" in codes(unrelated,w)
+
+def test_parallelism_requires_expected_activities_on_distinct_branches():
+    covered=requirements(parallelisms=[{"branches":[{"activity":"Review request"},{"activity":"Archive request"}]}])
+    wrong=requirements(parallelisms=[{"branches":[{"activity":"Review request"},{"activity":"Wait two days"}]}])
+    assert "MISSING_PARALLELISM" not in codes(covered)
+    assert "MISSING_PARALLELISM" in codes(wrong)
+
+def test_interaction_lane_context_uses_node_lane_and_rejects_wrong_lane():
+    w=workflow();w["nodes"]=[node("send","Send","sendTask","pa"),node("receive","Receive","receiveTask","pb")]
+    w["nodes"][0]["laneRef"]="lane_review";w["messageFlows"]=[{"id":"m","source":"send","target":"receive","properties":{}}]
+    good=requirements(interactions=[{"source":"Actor A","target":"Actor B","sourceLane":"Reviewer"}])
+    bad=requirements(interactions=[{"source":"Actor A","target":"Actor B","sourceLane":"Finance"}])
+    assert "MISSING_INTERACTION" not in codes(good,w)
+    assert "MISSING_INTERACTION" in codes(bad,w)
+
+def test_controlled_activity_lexical_variants_match_but_distinct_objects_do_not():
+    w=workflow();w["nodes"].append(node("close","Clôture dossier"))
+    assert "MISSING_ACTIVITY" not in codes(requirements(activities=[{"name":"Clôturer le dossier"}]),w)
+    w["nodes"].append(node("identity","Vérifier identité"))
+    issues=CoverageValidator().validate(requirements(activities=[{"name":"Vérifier montant"}]),w)
+    missing=next(issue for issue in issues if issue["code"]=="MISSING_ACTIVITY")
+    assert "identity" in missing["related_node_ids"]
+
+def test_semantically_duplicate_requirements_create_one_error():
+    normalized,_=normalize_semantic_requirements({"activities":["Clôturer dossier","Cloture dossier"]})
+    assert len(normalized["activities"])==1
+    assert [issue["code"] for issue in CoverageValidator().validate(normalized,workflow())].count("MISSING_ACTIVITY")==1
+
+def test_malformed_requirements_become_ambiguities_not_blocking_errors():
+    normalized,issues=normalize_semantic_requirements({"parallelisms":[{"branches":[]}],"decisions":[{"name":"State"}],"interactions":[{"source":"A"}],"timers":[{"kind":"unknown"}]})
+    assert not [issue for issue in issues if issue["severity"]=="error"]
+    assert normalized["parallelisms"]==[] and normalized["decisions"]==[] and normalized["interactions"]==[] and normalized["timers"]==[]
+    assert normalized["ambiguities"]
+    assert not [issue for issue in CoverageValidator().validate(normalized,workflow()) if issue["severity"]=="error"]
