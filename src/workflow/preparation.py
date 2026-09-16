@@ -51,13 +51,79 @@ class CanonicalWorkflowPreparer:
         numeric suffix if that ID already exists.
         """
         repaired=copy.deepcopy(workflow) if isinstance(workflow,Mapping) else {};report=[]
-        cls._split_shared_processes(repaired,report)
-        cls._repair_flows(repaired,report)
-        cls._normalize_message_tasks(repaired,report)
-        cls._normalize_timers(repaired,report)
-        cls._insert_unambiguous_isolated_timers(repaired,report)
-        cls.finalize_collaboration_process_structure(repaired,report)
+        phases=(
+            ("collaboration_structure",cls._repair_collaboration_structure),
+            ("timer_duration_normalization",cls._normalize_timers),
+            ("isolated_timer_insertion",cls._insert_unambiguous_isolated_timers),
+        )
+        for name,operation in phases:
+            repaired,trace=cls._apply_guarded_repair(repaired,name,operation)
+            report.extend(trace)
         return repaired,report
+
+    @classmethod
+    def _repair_collaboration_structure(cls,workflow,report):
+        """Apply the interdependent collaboration proof as one atomic repair."""
+        cls._repair_convergent_ownership(workflow,report)
+        cls._split_shared_processes(workflow,report)
+        cls._repair_flows(workflow,report)
+        cls._normalize_message_tasks(workflow,report)
+        cls.finalize_collaboration_process_structure(workflow,report)
+
+    @classmethod
+    def _apply_guarded_repair(cls,workflow,name,operation):
+        """Apply one phase only when its blocking-error count cannot increase."""
+        before=copy.deepcopy(workflow);candidate=copy.deepcopy(workflow);details=[]
+        before_count=cls._blocking_error_count(before)
+        operation(candidate,details)
+        after_count=cls._blocking_error_count(candidate)
+        changed=candidate!=before
+        if after_count>before_count:
+            return before,[cls._trace(name,False,"rollback: blocking error count increased",
+                                      before_count,after_count)]
+        if not changed:
+            for entry in details:
+                entry.update(repair=name,applied=False,reason="ambiguous or invalid structure left unchanged",
+                             before_error_count=before_count,after_error_count=after_count)
+            return candidate,details
+        reason="unique structural preconditions satisfied"
+        if not details:
+            return candidate,[cls._trace(name,True,reason,before_count,after_count)]
+        for entry in details:
+            entry.update(repair=name,applied=True,reason=reason,
+                         before_error_count=before_count,after_error_count=after_count)
+        return candidate,details
+
+    @staticmethod
+    def _blocking_error_count(workflow):
+        try:
+            return sum(issue.get("severity","error")=="error"
+                       for issue in SemanticValidator().validate(workflow))
+        except Exception:
+            return 10**9
+
+    @classmethod
+    def _repair_convergent_ownership(cls,workflow,report):
+        participants=workflow.get("participants",[]);lanes=workflow.get("lanes",[]);nodes=workflow.get("nodes",[])
+        if not all(isinstance(value,list) for value in (participants,lanes,nodes)):return
+        participant_by_id={p.get("id"):p for p in participants if isinstance(p,Mapping)}
+        lane_by_id={lane.get("id"):lane for lane in lanes if isinstance(lane,Mapping)}
+        for lane in lanes:
+            if not isinstance(lane,dict):continue
+            participant=participant_by_id.get(lane.get("participantRef"))
+            process_id=participant.get("processRef") if isinstance(participant,Mapping) else None
+            if isinstance(process_id,str) and lane.get("processRef")!=process_id:
+                lane["processRef"]=process_id
+                report.append(cls._entry("LANE_PROCESS_REF_REPAIRED","Lane ownership converged on its participant process."))
+        for node in nodes:
+            if not isinstance(node,dict) or not node.get("participantRef") or not node.get("laneRef"):continue
+            participant=participant_by_id.get(node.get("participantRef"));lane=lane_by_id.get(node.get("laneRef"))
+            participant_process=participant.get("processRef") if isinstance(participant,Mapping) else None
+            lane_process=lane.get("processRef") if isinstance(lane,Mapping) else None
+            if (isinstance(participant_process,str) and participant_process==lane_process and
+                    node.get("processRef")!=participant_process):
+                node["processRef"]=participant_process
+                report.append(cls._entry("NODE_PROCESS_REF_REPAIRED","Node ownership references converge on one process.",node_id=node.get("id")))
 
     @classmethod
     def _normalize_timers(cls,workflow,report):
@@ -87,31 +153,25 @@ class CanonicalWorkflowPreparer:
             if not isinstance(definition,Mapping):continue
             timer_id=timer.get("id");process_id=timer.get("processRef")
             if any(isinstance(f,Mapping) and timer_id in (f.get("source"),f.get("target")) for f in flows):continue
-            timer_tokens=cls._semantic_tokens(timer.get("name"),timer_id)
-            if not timer_tokens:continue
-            named=[];inferred=[]
+            timer_name=cls._normalized_label(timer.get("name"))
+            if not timer_name:continue
+            named=[]
             for flow in flows:
                 if not isinstance(flow,dict) or flow.get("processRef")!=process_id:continue
                 source=node_by_id.get(flow.get("source"));target=node_by_id.get(flow.get("target"))
                 if source is None or target is None:continue
-                flow_tokens=cls._semantic_tokens(flow.get("name"))
-                endpoint_tokens=cls._semantic_tokens(source.get("name"),source.get("id"),target.get("name"),target.get("id"))
-                if timer_tokens & flow_tokens:named.append(flow)
-                elif not flow_tokens and timer_tokens & endpoint_tokens:inferred.append(flow)
-            local=named if named else inferred
-            if len(local)!=1:continue
-            direct=local[0];successor=direct["target"];direct["target"]=timer_id
+                if cls._normalized_label(flow.get("name"))==timer_name:named.append(flow)
+            if len(named)!=1:continue
+            direct=named[0];successor=direct["target"];direct["target"]=timer_id
             after_id=cls._unique_id(f"{direct.get('id')}_after_timer",used_flow_ids);used_flow_ids.add(after_id)
             flows.append({"id":after_id,"source":timer_id,"target":successor,"processRef":process_id,
                           "condition":None,"isDefault":False,"properties":{}})
             report.append(cls._entry("ISOLATED_TIMER_INSERTED","Isolated timer inserted into its unique matching sequence flow.",node_id=timer_id))
 
     @staticmethod
-    def _semantic_tokens(*values):
-        ignored={"node","timer","attente","attendre","waiting","wait","delay","event","flow","pour","apres","avant","the","and"}
-        text=" ".join(str(value or "") for value in values)
-        text=unicodedata.normalize("NFKD",text).encode("ascii","ignore").decode("ascii").lower()
-        return {token for token in re.findall(r"[a-z0-9]+",text) if len(token)>=4 and token not in ignored and not token.isdigit()}
+    def _normalized_label(value):
+        text=unicodedata.normalize("NFKD",str(value or "")).encode("ascii","ignore").decode("ascii")
+        return " ".join(text.lower().split())
 
     @classmethod
     def _split_shared_processes(cls,workflow,report):
@@ -151,7 +211,7 @@ class CanonicalWorkflowPreparer:
         for raw in messages:
             if not isinstance(raw,Mapping):deduped.append(raw);continue
             message=dict(raw);pair=(message.get("source"),message.get("target"))
-            if pair in pairs:
+            if any(isinstance(existing,Mapping) and existing==message for existing in deduped):
                 report.append(cls._entry("DUPLICATE_MESSAGE_FLOW_REMOVED","Duplicate message flow removed.",flow_id=message.get("id")));continue
             pairs.add(pair);identifier=str(message.get("id") or "")
             if not identifier or identifier in used_ids:identifier=cls._unique_id("message_flow_1",used_ids);message["id"]=identifier
@@ -239,32 +299,32 @@ class CanonicalWorkflowPreparer:
             ends=sorted((n for n in local_nodes if n.get("type")=="endEvent"),key=lambda n:str(n.get("id")))
 
             if not starts:
-                start_id=cls._unique_id(f"start_{process_id}",used_node_ids);used_node_ids.add(start_id)
-                start=cls._technical_event(start_id,"startEvent",process_id,participant_by_process.get(process_id));nodes.append(start);starts=[start]
                 candidates=[n for n in local_nodes if incoming.get(n.get("id"),0)==0 and
                             (outgoing.get(n.get("id"),0)>0 or n.get("id") in message_endpoints)]
                 roots=candidates if len(candidates)==1 else []
+                if roots:
+                    start_id=cls._unique_id(f"start_{process_id}",used_node_ids);used_node_ids.add(start_id)
+                    start=cls._technical_event(start_id,"startEvent",process_id,participant_by_process.get(process_id));nodes.append(start);starts=[start]
             else:
                 all_roots=[n for n in local_nodes if n.get("type")!="startEvent" and incoming.get(n.get("id"),0)==0]
                 eligible=[n for n in all_roots if n.get("id") in message_targets or n.get("id") in isolated_message_ids]
-                start_has_outgoing=outgoing.get(starts[0]["id"],0)>0
-                roots=[] if start_has_outgoing else (eligible if len(eligible)==1 else (all_roots if len(all_roots)==1 else []))
+                roots=[] if len(starts)!=1 or outgoing.get(starts[0]["id"],0)>0 else (eligible if len(eligible)==1 else (all_roots if len(all_roots)==1 else []))
             for root in roots:
                 cls._add_technical_flow(flows,used_flow_ids,starts[0]["id"],root["id"],process_id,report,"START_FLOW_ADDED")
                 incoming[root["id"]]=incoming.get(root["id"],0)+1
 
             if not ends:
-                end_id=cls._unique_id(f"end_{process_id}",used_node_ids);used_node_ids.add(end_id)
-                end=cls._technical_event(end_id,"endEvent",process_id,participant_by_process.get(process_id));nodes.append(end);ends=[end]
                 candidates=[n for n in local_nodes if outgoing.get(n.get("id"),0)==0 and
                             (incoming.get(n.get("id"),0)>0 or n.get("id") in message_endpoints)]
                 sinks=candidates if len(candidates)==1 else []
                 if not roots and len(local_nodes)==1 and local_nodes[0].get("type")=="startEvent":sinks=local_nodes
+                if sinks:
+                    end_id=cls._unique_id(f"end_{process_id}",used_node_ids);used_node_ids.add(end_id)
+                    end=cls._technical_event(end_id,"endEvent",process_id,participant_by_process.get(process_id));nodes.append(end);ends=[end]
             else:
                 all_sinks=[n for n in local_nodes if n.get("type")!="endEvent" and outgoing.get(n.get("id"),0)==0]
                 eligible=[n for n in all_sinks if n.get("id") in message_sources or n.get("id") in isolated_message_ids]
-                end_has_incoming=incoming.get(ends[0]["id"],0)>0
-                sinks=[] if end_has_incoming else (eligible if len(eligible)==1 else (all_sinks if len(all_sinks)==1 else []))
+                sinks=[] if len(ends)!=1 or incoming.get(ends[0]["id"],0)>0 else (eligible if len(eligible)==1 else (all_sinks if len(all_sinks)==1 else []))
             for sink in sinks:
                 cls._add_technical_flow(flows,used_flow_ids,sink["id"],ends[0]["id"],process_id,report,"END_FLOW_ADDED")
 
@@ -291,18 +351,12 @@ class CanonicalWorkflowPreparer:
                 roots={node_id for node_id in local_ids if node_id in message_targets and incoming[node_id]==0}
                 proposals=[]
                 for sink in sinks:
-                    distances=cls._causal_distances(sink,combined)
-                    candidates=[(distances[root],root) for root in roots if root in distances and root!=sink]
-                    if not candidates:continue
-                    minimum=min(distance for distance,_ in candidates)
-                    nearest=sorted(root for distance,root in candidates if distance==minimum)
-                    if len(nearest)==1:proposals.append((sink,nearest[0]))
-                # A target claimed by several equally valid local sinks is still
-                # ambiguous; leave it for semantic/model repair.
+                    first_roots=cls._first_reachable_roots(sink,roots,combined)
+                    if len(first_roots)==1:proposals.append((sink,next(iter(first_roots))))
                 target_counts=Counter(target for _,target in proposals)
-                unambiguous=[pair for pair in proposals if target_counts[pair[1]]==1]
-                if unambiguous:
-                    source,target=sorted(unambiguous)[0]
+                candidates=[pair for pair in proposals if target_counts[pair[1]]==1]
+                if candidates:
+                    source,target=sorted(candidates)[0]
                     cls._add_technical_flow(flows,used_flow_ids,source,target,process_id,report,"COLLABORATION_CONTINUITY_FLOW_ADDED")
                     added=True;break
             if not added:break
@@ -311,14 +365,17 @@ class CanonicalWorkflowPreparer:
         return workflow
 
     @staticmethod
-    def _causal_distances(source,adjacency):
-        distances={source:0};queue=[source]
+    def _first_reachable_roots(source,roots,adjacency):
+        """Find process re-entry points without traversing beyond a re-entry."""
+        found=set();visited={source};queue=[source]
         while queue:
             current=queue.pop(0)
-            for target in sorted(adjacency.get(current,[]),key=str):
-                if target in distances:continue
-                distances[target]=distances[current]+1;queue.append(target)
-        return distances
+            for successor in adjacency.get(current,[]):
+                if successor in roots:
+                    found.add(successor);continue
+                if successor not in visited:
+                    visited.add(successor);queue.append(successor)
+        return found
 
     @staticmethod
     def _technical_event(identifier,node_type,process_id,participant_id):
@@ -342,3 +399,9 @@ class CanonicalWorkflowPreparer:
     @staticmethod
     def _entry(code,message,flow_id=None,node_id=None):
         return {"code":code,"message":message,"flow_id":str(flow_id) if flow_id is not None else None,"node_id":str(node_id) if node_id is not None else None,"severity":"warning"}
+
+    @staticmethod
+    def _trace(repair,applied,reason,before_error_count,after_error_count):
+        return {"code":"SAFE_REPAIR_TRACE","severity":"warning","repair":repair,
+                "applied":applied,"reason":reason,
+                "before_error_count":before_error_count,"after_error_count":after_error_count}
