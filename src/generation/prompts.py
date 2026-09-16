@@ -47,6 +47,17 @@ participant_beta.processRef = process_beta. Nodes owned by participant_alpha use
 process_alpha; nodes owned by participant_beta use process_beta. Communication
 between those nodes belongs in messageFlows, never flows."""
 
+_REPAIR_RULES = """Contraintes canoniques essentielles :
+- schemaVersion vaut exactement "2.0".
+- Conserve processes, participants, lanes, nodes, flows, messageFlows et ambiguities.
+- participant.processRef, lane.processRef, lane.participantRef, node.processRef et flow.processRef sont cohérents.
+- Utilise source et target, jamais sourceRef ni targetRef.
+- Un flow reste dans un seul process; une communication entre process utilise messageFlows.
+- N'utilise jamais participant.nodeRefs, lane.nodeRefs ou des lanes imbriquées.
+- Types autorisés: startEvent, endEvent, userTask, serviceTask, manualTask, scriptTask, businessRuleTask, sendTask, receiveTask, exclusiveGateway, parallelGateway, inclusiveGateway, eventBasedGateway, subProcess, intermediateCatchEvent, intermediateThrowEvent.
+- Un timer est un intermediateCatchEvent avec properties.timer et une valeur ISO 8601.
+- Une parallelGateway ne porte aucune condition sortante."""
+
 def build_generation_prompt(description:str,schema:dict[str,Any])->str:
     return ("Transforme la description métier en workflow JSON canonique v2.\n\n"
         f"Description métier:\n{description}\n\nJSON Schema officiel:\n{json.dumps(schema,ensure_ascii=False,indent=2,sort_keys=True)}\n\n"
@@ -56,8 +67,8 @@ def build_repair_prompt(workflow:dict[str,Any],errors:list[dict[str,Any]],schema
     lines=[f"- [{e.get('code','ERROR')}] {e.get('message','Erreur non décrite')}" for e in errors if isinstance(e,dict)] or ["- Validation échouée"]
     context=(f"Description originale:\n{description}\n\nExigences sémantiques:\n{json.dumps(requirements,ensure_ascii=False,indent=2)}\n\n" if description is not None and requirements is not None else "")
     return ("Corrige uniquement les informations manquantes du workflow JSON canonique v2 sans le reconstruire inutilement.\n\n"+context+"Erreurs:\n"
-        +"\n".join(lines)+f"\n\nWorkflow:\n{json.dumps(workflow,ensure_ascii=False,indent=2,sort_keys=True)}"
-        f"\n\nJSON Schema officiel:\n{json.dumps(schema,ensure_ascii=False,indent=2,sort_keys=True)}\n\n{_V2_RULES}\n"
+        +"\n".join(lines)+f"\n\nWorkflow:\n{json.dumps(workflow,ensure_ascii=False,separators=(',',':'),sort_keys=True)}"
+        f"\n\n{_REPAIR_RULES}\n"
         "Pour MULTIPLE_PARTICIPANTS_FOR_PROCESS: Create one distinct process per participant and update participant.processRef, node.processRef, lane.processRef and flow.processRef consistently.\n"
         "Pour MESSAGE_FLOW_WITHIN_SAME_PROCESS, sépare d'abord les processes des participants si nécessaire avant de modifier le messageFlow.\n"
         "Pour INVALID_TIMER_DURATION, utilise obligatoirement une durée ISO 8601.\n"
@@ -72,8 +83,8 @@ def build_coverage_repair_prompt(workflow:dict[str,Any],errors:list[dict[str,Any
     return (
         "Corrige uniquement ces exigences manquantes dans le workflow existant. "
         "Ne régénère pas le workflow et préserve tous ses processus, participants, nœuds et flux existants.\n\n"
-        f"Exigences sémantiques nécessaires:\n{json.dumps(requirements,ensure_ascii=False,indent=2,sort_keys=True)}\n\n"
-        f"Erreurs de couverture bloquantes:\n{json.dumps(blocking,ensure_ascii=False,indent=2,sort_keys=True)}\n\n"
-        f"Workflow actuel:\n{json.dumps(workflow,ensure_ascii=False,indent=2,sort_keys=True)}\n\n"
+        f"Exigences sémantiques nécessaires:\n{json.dumps(requirements,ensure_ascii=False,separators=(',',':'),sort_keys=True)}\n\n"
+        f"Erreurs de couverture bloquantes:\n{json.dumps(blocking,ensure_ascii=False,separators=(',',':'),sort_keys=True)}\n\n"
+        f"Workflow actuel:\n{json.dumps(workflow,ensure_ascii=False,separators=(',',':'),sort_keys=True)}\n\n"
         "Retourne uniquement l'objet JSON complet corrigé, sans Markdown ni explication."
     )

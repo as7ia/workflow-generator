@@ -101,6 +101,8 @@ class WorkflowRepairer:
                     )
                 )
                 prompt_errors = self._prompt_errors(current_errors)
+                if self._is_resource_exhaustion(exc):
+                    break
                 continue
 
             if not isinstance(generated, Mapping):
@@ -271,11 +273,21 @@ class WorkflowRepairer:
             compact={key:copy.deepcopy(error[key]) for key in
                      ("code","message","path","process_id","participant_id","lane_id","node_id","flow_id","severity")
                      if key in error}
-            key=tuple((name,json.dumps(value,ensure_ascii=False,sort_keys=True,default=str))
-                      for name,value in sorted(compact.items()))
+            normalized_message=" ".join(str(compact.get("message","")).lower().split())
+            key=(compact.get("code"),compact.get("node_id"),compact.get("flow_id"),
+                 compact.get("process_id"),normalized_message)
             if key in seen:continue
             seen.add(key);result.append(compact)
         return result
+
+    @staticmethod
+    def _is_resource_exhaustion(error: Exception) -> bool:
+        """Identify CUDA OOM and compiler-wide generation-budget exhaustion."""
+        if getattr(error, "generation_budget_exhausted", False):
+            return True
+        name = type(error).__name__.lower()
+        message = str(error).lower()
+        return ("outofmemory" in name or "out of memory" in message) and "cuda" in message
 
     @staticmethod
     def _attempt(

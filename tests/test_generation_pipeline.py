@@ -30,6 +30,10 @@ def test_unknown_version_rejected():
     bad=v2(version="9.0");result=compiler(bad,bad,bad,bad).compile("x");assert result["schema_errors"] and result["normalized_workflow"]["schemaVersion"]=="9.0"
 def test_valid_does_not_call_repair():
     c=compiler(v2());result=c.compile("x");assert result["repair_report"]==[] and len(c.generator.prompts)==1
+    assert result["generation_stats"]=={
+        "initial_generation_calls":1,"structural_repair_calls":0,
+        "coverage_repair_calls":0,"semantic_requirement_calls":1,"total_qwen_calls":2}
+    assert result["prompt_stats"]["initial_prompt_chars"]>0
 def test_invalid_calls_repair():
     bad=v2(nodes=[n("s",t="startEvent"),n("t")],flows=[f("f","s","t")]);c=compiler(bad,v2());result=c.compile("x");assert result["success"] and len(c.generator.prompts)==2
 def test_zero_repair_attempts_never_calls_generator_for_repair():
@@ -37,6 +41,27 @@ def test_zero_repair_attempts_never_calls_generator_for_repair():
     c=WorkflowCompiler(g,SCHEMA,max_repair_attempts=0);c._bpmn_generator=Xml();result=c.compile("x")
     assert result["error"]["stage"]=="repair" and len(g.prompts)==1 and result["repair_report"]==[]
     assert result["pipeline_debug"]["after_structural_repair"]==result["pipeline_debug"]["final_current_workflow"]
+
+def test_global_generation_budget_stops_before_extra_repair_call():
+    bad=v2(nodes=[n("s",t="startEvent"),n("t")],flows=[f("f","s","t")]);g=Generator(bad,v2())
+    c=WorkflowCompiler(g,SCHEMA,max_repair_attempts=3,max_total_generation_calls=2);c._bpmn_generator=Xml()
+    result=c.compile("x")
+    assert result["error"]["stage"]=="repair" and len(g.prompts)==1
+    assert result["generation_stats"]["total_qwen_calls"]==2
+    assert result["generation_stats"]["structural_repair_calls"]==0
+    assert result["normalized_workflow"]["nodes"]
+
+def test_phase_token_limits_are_forwarded_when_generator_supports_them():
+    class TokenAware:
+        def __init__(self):self.limits=[]
+        def generate_json(self,prompt,max_new_tokens=None):
+            self.limits.append(max_new_tokens)
+            return empty_requirements() if prompt.startswith("SEMANTIC_REQUIREMENTS_EXTRACTION") else v2()
+    generator=TokenAware();compiler=WorkflowCompiler(
+        generator,SCHEMA,requirements_max_new_tokens=111,
+        initial_max_new_tokens=222,repair_max_new_tokens=333)
+    compiler._bpmn_generator=Xml();result=compiler.compile("x")
+    assert result["success"] and generator.limits==[111,222]
 def test_partially_improved_structural_candidate_becomes_current_source_of_truth():
     broken=v2(nodes=[n("s",t="startEvent"),n("t")],flows=[])
     improved=v2(nodes=[n("s",t="startEvent"),n("t")],flows=[f("f","s","t")])
@@ -98,6 +123,8 @@ def test_coverage_error_is_repaired_with_description_and_requirements():
     assert len(g.prompts)==2 and "MISSING_TIMER" in g.prompts[1] and "P2D" in g.prompts[1]
     assert "JSON Schema officiel" not in g.prompts[1] and "ambiguities" in g.prompts[1]
     assert result["repair_report"][-1]["coverage_repair"]["accepted_candidate"] is True
+    assert result["generation_stats"]["coverage_repair_calls"]==1
+    assert result["prompt_stats"]["last_coverage_repair_prompt_chars"]==len(g.prompts[1])
 
 def test_coverage_warnings_do_not_block_compilation():
     g=CoverageGenerator(empty_requirements(ambiguities=[{"message":"unclear optional role"}]),v2());c=WorkflowCompiler(g,SCHEMA);c._bpmn_generator=Xml()

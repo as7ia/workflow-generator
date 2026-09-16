@@ -22,6 +22,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=3,
         help="Nombre maximal de tentatives de réparation JSON.",
     )
+    parser.add_argument("--max-structural-repair-attempts", type=int, default=None)
+    parser.add_argument("--max-coverage-repair-attempts", type=int, default=None)
+    parser.add_argument("--max-total-generation-calls", type=int, default=4)
+    parser.add_argument("--initial-max-new-tokens", type=int, default=4096)
+    parser.add_argument("--repair-max-new-tokens", type=int, default=2048)
+    parser.add_argument("--requirements-max-new-tokens", type=int, default=1024)
     parser.add_argument("--output", default="output/run", help="Répertoire de sortie.")
     parser.add_argument(
         "--load-in-4bit",
@@ -40,8 +46,18 @@ def main(argv: list[str] | None = None) -> int:
     if not description:
         print("Erreur : la description métier est vide.")
         return 2
-    if arguments.max_repair_attempts < 0:
-        print("Erreur : --max-repair-attempts doit être positif ou nul.")
+    attempt_limits = (
+        arguments.max_repair_attempts,
+        arguments.max_structural_repair_attempts,
+        arguments.max_coverage_repair_attempts,
+        arguments.max_total_generation_calls,
+    )
+    if any(value is not None and value < 0 for value in attempt_limits):
+        print("Erreur : les limites de génération doivent être positives ou nulles.")
+        return 2
+    if min(arguments.initial_max_new_tokens, arguments.repair_max_new_tokens,
+           arguments.requirements_max_new_tokens) <= 0:
+        print("Erreur : les limites de tokens doivent être strictement positives.")
         return 2
 
     project_root = Path(__file__).resolve().parent.parent
@@ -53,6 +69,12 @@ def main(argv: list[str] | None = None) -> int:
             generator,
             schema_path,
             max_repair_attempts=arguments.max_repair_attempts,
+            max_structural_repair_attempts=arguments.max_structural_repair_attempts,
+            max_coverage_repair_attempts=arguments.max_coverage_repair_attempts,
+            max_total_generation_calls=arguments.max_total_generation_calls,
+            initial_max_new_tokens=arguments.initial_max_new_tokens,
+            repair_max_new_tokens=arguments.repair_max_new_tokens,
+            requirements_max_new_tokens=arguments.requirements_max_new_tokens,
         )
         output_dir = Path(arguments.output)
         result = compiler.compile_and_save(description, str(output_dir))

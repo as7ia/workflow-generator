@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import inspect
 import json
 from collections.abc import Mapping
 from pathlib import Path
@@ -39,6 +40,22 @@ from .prompts import build_generation_prompt, build_semantic_requirements_prompt
 CompilationResult = dict[str, Any]
 
 
+class _GenerationBudgetExceeded(RuntimeError):
+    generation_budget_exhausted = True
+
+
+class _PhaseGenerator:
+    """Count and budget repair calls without changing repairer architecture."""
+
+    def __init__(self, compiler: "WorkflowCompiler", result: CompilationResult, phase: str) -> None:
+        self.compiler = compiler
+        self.result = result
+        self.phase = phase
+
+    def generate_json(self, prompt: str) -> dict[str, Any]:
+        return self.compiler._call_generator(self.result, self.phase, prompt)
+
+
 class WorkflowCompiler:
     """Coordinate generation, normalization, repair, analysis and layout."""
 
@@ -47,10 +64,41 @@ class WorkflowCompiler:
         generator: Any,
         schema_path: str | Path,
         max_repair_attempts: int = 3,
+        max_structural_repair_attempts: int | None = None,
+        max_coverage_repair_attempts: int | None = None,
+        max_total_generation_calls: int = 4,
+        initial_max_new_tokens: int = 4096,
+        repair_max_new_tokens: int = 2048,
+        requirements_max_new_tokens: int = 1024,
     ) -> None:
         self.generator = generator
         self.schema_path = Path(schema_path)
         self.max_repair_attempts = max_repair_attempts
+        self.max_structural_repair_attempts = (
+            max_repair_attempts if max_structural_repair_attempts is None
+            else max_structural_repair_attempts
+        )
+        self.max_coverage_repair_attempts = (
+            max_repair_attempts if max_coverage_repair_attempts is None
+            else max_coverage_repair_attempts
+        )
+        limits = {
+            "max_repair_attempts": max_repair_attempts,
+            "max_structural_repair_attempts": self.max_structural_repair_attempts,
+            "max_coverage_repair_attempts": self.max_coverage_repair_attempts,
+            "max_total_generation_calls": max_total_generation_calls,
+        }
+        if any(not isinstance(value, int) or isinstance(value, bool) or value < 0
+               for value in limits.values()):
+            raise ValueError("Les limites de génération doivent être des entiers positifs ou nuls.")
+        token_limits = (initial_max_new_tokens, repair_max_new_tokens, requirements_max_new_tokens)
+        if any(not isinstance(value, int) or isinstance(value, bool) or value <= 0
+               for value in token_limits):
+            raise ValueError("Les limites de tokens doivent être des entiers strictement positifs.")
+        self.max_total_generation_calls = max_total_generation_calls
+        self.initial_max_new_tokens = initial_max_new_tokens
+        self.repair_max_new_tokens = repair_max_new_tokens
+        self.requirements_max_new_tokens = requirements_max_new_tokens
         self._normalizer = WorkflowNormalizer()
         self._semantic_validator = SemanticValidator()
         self._analyzer = WorkflowGraphAnalyzer()
@@ -68,7 +116,8 @@ class WorkflowCompiler:
             return self._fail(result, "schema_validation", exc)
 
         try:
-            extracted=self.generator.generate_json(build_semantic_requirements_prompt(description))
+            requirements_prompt=build_semantic_requirements_prompt(description)
+            extracted=self._call_generator(result,"semantic_requirement",requirements_prompt)
             requirements,requirement_issues=normalize_semantic_requirements(extracted)
             result["semantic_requirements"]=requirements
             if requirement_issues:return self._fail(result,"requirements_extraction",requirement_issues[0]["message"])
@@ -82,7 +131,7 @@ class WorkflowCompiler:
                 raise TypeError(
                     "Le générateur doit exposer generate_json(prompt: str) -> dict."
                 )
-            raw = generate_json(prompt)
+            raw = self._call_generator(result,"initial_generation",prompt)
             if not isinstance(raw, Mapping):
                 raise TypeError("Le générateur doit retourner un dictionnaire JSON.")
             result["raw_workflow"] = copy.deepcopy(dict(raw))
@@ -125,12 +174,12 @@ class WorkflowCompiler:
         if blocking:
             try:
                 repairer = WorkflowRepairer(
-                    max_attempts=self.max_repair_attempts, schema=schema
+                    max_attempts=self.max_structural_repair_attempts, schema=schema
                 )
                 repaired_workflow, repair_report = repairer.repair(
                     workflow=current_workflow,
                     errors=blocking,
-                    generator=self.generator,
+                    generator=_PhaseGenerator(self,result,"structural_repair"),
                     workflow_is_prepared=True,
                 )
                 prepared = preparer.validate_prepared(repaired_workflow)
@@ -168,9 +217,10 @@ class WorkflowCompiler:
             try:
                 base_workflow=copy.deepcopy(current_workflow)
                 required_coverage=self._requirements_for_errors(requirements,blocking)
-                repairer=WorkflowRepairer(max_attempts=self.max_repair_attempts,schema=schema)
+                repairer=WorkflowRepairer(max_attempts=self.max_coverage_repair_attempts,schema=schema)
                 coverage_candidate,coverage_report=repairer.repair(
-                    workflow=copy.deepcopy(base_workflow),errors=blocking,generator=self.generator,
+                    workflow=copy.deepcopy(base_workflow),errors=blocking,
+                    generator=_PhaseGenerator(self,result,"coverage_repair"),
                     requirements=required_coverage,repair_kind="coverage",workflow_is_prepared=True)
                 candidate_prepared=preparer.validate_prepared(coverage_candidate)
                 candidate_workflow=candidate_prepared["workflow"]
@@ -293,6 +343,18 @@ class WorkflowCompiler:
             "bpmn_xml": None,
             "warnings": [],
             "error": None,
+            "generation_stats": {
+                "initial_generation_calls": 0,
+                "structural_repair_calls": 0,
+                "coverage_repair_calls": 0,
+                "semantic_requirement_calls": 0,
+                "total_qwen_calls": 0,
+            },
+            "prompt_stats": {
+                "initial_prompt_chars": None,
+                "last_structural_repair_prompt_chars": None,
+                "last_coverage_repair_prompt_chars": None,
+            },
             "pipeline_debug": {
                 "generation": {"raw_text_length": None,"json_extracted": False,"parse_success": False},
                 "after_qwen_parse": None,
@@ -304,6 +366,41 @@ class WorkflowCompiler:
                 "final_current_workflow": None,
             },
         }
+
+    def _call_generator(
+        self, result: CompilationResult, phase: str, prompt: str
+    ) -> dict[str, Any]:
+        """Apply the global budget, phase token limit and non-sensitive metrics."""
+        stats = result["generation_stats"]
+        if stats["total_qwen_calls"] >= self.max_total_generation_calls:
+            raise _GenerationBudgetExceeded(
+                f"Limite globale de {self.max_total_generation_calls} appels Qwen atteinte."
+            )
+        mapping = {
+            "initial_generation": ("initial_generation_calls", self.initial_max_new_tokens,
+                                   "initial_prompt_chars"),
+            "structural_repair": ("structural_repair_calls", self.repair_max_new_tokens,
+                                  "last_structural_repair_prompt_chars"),
+            "coverage_repair": ("coverage_repair_calls", self.repair_max_new_tokens,
+                                "last_coverage_repair_prompt_chars"),
+            "semantic_requirement": ("semantic_requirement_calls", self.requirements_max_new_tokens,
+                                     None),
+        }
+        counter, token_limit, prompt_stat = mapping[phase]
+        stats[counter] += 1
+        stats["total_qwen_calls"] += 1
+        if prompt_stat is not None:
+            result["prompt_stats"][prompt_stat] = len(prompt)
+        generate_json = getattr(self.generator, "generate_json", None)
+        if not callable(generate_json):
+            raise TypeError("Le générateur doit exposer generate_json(prompt: str) -> dict.")
+        try:
+            supports_limit = "max_new_tokens" in inspect.signature(generate_json).parameters
+        except (TypeError, ValueError):
+            supports_limit = False
+        if supports_limit:
+            return generate_json(prompt, max_new_tokens=token_limit)
+        return generate_json(prompt)
 
     @staticmethod
     def _workflow_counts(workflow: Mapping[str, Any]) -> dict[str, int]:

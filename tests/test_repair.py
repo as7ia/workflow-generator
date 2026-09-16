@@ -54,6 +54,23 @@ def test_generator_exception_reported():
         def generate_json(self,prompt):raise RuntimeError("offline")
     _,report=WorkflowRepairer(1).repair(v1(False),ERROR,Broken());assert any(e["code"]=="GENERATOR_EXCEPTION" for e in report[0]["output_errors"])
 
+def test_cuda_oom_stops_phase_and_preserves_best_workflow():
+    class Oom:
+        def __init__(self):self.calls=0
+        def generate_json(self,prompt):
+            self.calls+=1
+            raise RuntimeError("CUDA out of memory")
+    generator=Oom();original=v1(False)
+    result,report=WorkflowRepairer(3).repair(original,ERROR,generator)
+    assert generator.calls==1 and len(report)==1
+    assert result["schemaVersion"]=="2.0" and result["nodes"]
+    assert any(error["code"]=="GENERATOR_EXCEPTION" for error in report[0]["output_errors"])
+
+def test_structural_prompt_omits_full_schema_and_compacts_workflow():
+    prompt=WorkflowRepairer().build_repair_prompt(v1(False),ERROR)
+    assert "JSON Schema officiel" not in prompt
+    assert '\n  "nodes"' not in prompt
+
 def canonical_three_processes():
     processes=[];participants=[];nodes=[];flows=[]
     for index,name in enumerate(("Client","Entreprise","Banque"),1):

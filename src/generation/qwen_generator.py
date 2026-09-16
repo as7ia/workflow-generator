@@ -72,8 +72,13 @@ class QwenWorkflowGenerator:
             "parse_success": False, "cause": None,
         }
 
-    def generate_json(self, prompt: str) -> dict[str, Any]:
+    def generate_json(
+        self, prompt: str, max_new_tokens: int | None = None
+    ) -> dict[str, Any]:
         """Run Qwen and return the JSON object extracted from its response."""
+        token_limit = self.max_new_tokens if max_new_tokens is None else max_new_tokens
+        if not isinstance(token_limit, int) or isinstance(token_limit, bool) or token_limit <= 0:
+            raise ValueError("max_new_tokens doit être un entier strictement positif")
         strict_prompt = (
             f"{prompt}\n\nRetourne uniquement un objet JSON valide, sans Markdown ni explication."
         )
@@ -98,10 +103,19 @@ class QwenWorkflowGenerator:
             generation_inputs = dict(inputs) if isinstance(inputs, Mapping) else inputs
             if not isinstance(generation_inputs, dict):
                 raise TypeError("Le tokenizer doit retourner un mapping compatible avec model.generate().")
-            outputs = self.model.generate(
-                **generation_inputs,
-                max_new_tokens=self.max_new_tokens,
-            )
+            try:
+                import torch
+
+                inference_context = torch.inference_mode()
+            except Exception:  # pragma: no cover - torch is optional for fake models.
+                from contextlib import nullcontext
+
+                inference_context = nullcontext()
+            with inference_context:
+                outputs = self.model.generate(
+                    **generation_inputs,
+                    max_new_tokens=token_limit,
+                )
             input_ids = generation_inputs.get("input_ids")
             prompt_length = self._sequence_length(input_ids)
             generated_ids = outputs[0][prompt_length:] if prompt_length is not None else outputs[0]
@@ -121,11 +135,12 @@ class QwenWorkflowGenerator:
             # Release references between complete generation attempts. Cleanup is
             # best-effort and must never hide the original generation/OOM error.
             inputs = generation_inputs = outputs = generated_ids = input_ids = None
-            self._release_cuda_cache()
+            # Keeping the loaded model and its reusable CUDA allocations is both
+            # faster and less fragmenting than emptying the cache after each call.
 
     @staticmethod
     def _release_cuda_cache() -> None:
-        """Release unused CUDA allocations between generation calls, if active."""
+        """Explicit emergency hook retained for callers handling a CUDA OOM."""
         try:
             import torch
 
