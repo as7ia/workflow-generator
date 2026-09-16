@@ -353,7 +353,8 @@ class WorkflowCompiler:
             "interactions", "activities", "ambiguities",
         )}
         for error in errors:
-            kind = code_to_kind.get(error.get("code"))
+            code = error.get("code")
+            kind = code_to_kind.get(code) if isinstance(code, str) else None
             requirement = error.get("requirement")
             if kind and isinstance(requirement, Mapping) and requirement not in selected[kind]:
                 selected[kind].append(copy.deepcopy(dict(requirement)))

@@ -39,12 +39,12 @@ class CanonicalWorkflowPreparer:
         numeric suffix if that ID already exists.
         """
         repaired=copy.deepcopy(workflow) if isinstance(workflow,Mapping) else {};report=[]
-        split_processes=cls._split_shared_processes(repaired,report)
-        converted_sources,converted_targets=cls._repair_flows(repaired,report)
+        cls._split_shared_processes(repaired,report)
+        cls._repair_flows(repaired,report)
         cls._normalize_message_tasks(repaired,report)
         cls._normalize_timers(repaired,report)
         cls._insert_unambiguous_isolated_timers(repaired,report)
-        cls._finalize_split_processes(repaired,split_processes,converted_sources,converted_targets,report)
+        cls.finalize_collaboration_process_structure(repaired,report)
         return repaired,report
 
     @classmethod
@@ -189,11 +189,21 @@ class CanonicalWorkflowPreparer:
             report.append(cls._entry(code,f"messageTask '{node_id}' normalized to {node['type']}.",node_id=node_id))
 
     @classmethod
-    def _finalize_split_processes(cls,workflow,split_processes,converted_sources,converted_targets,report):
-        if not split_processes:return
+    def finalize_collaboration_process_structure(cls,workflow,report=None):
+        """Complete locally unambiguous process chains around message endpoints.
+
+        Message flows express collaboration causality, but never contribute a
+        sequence-flow edge to a process graph.  Generated collaborations often
+        use a cross-process sequence flow for that causality; after conversion
+        its two local endpoints would otherwise be left disconnected.  This
+        pass restores only edges proved by a unique local root/sink or by a
+        unique causal path through message flows.
+        """
+        if report is None:report=[]
         nodes=workflow.get("nodes",[]);flows=workflow.get("flows",[]);messages=workflow.get("messageFlows",[])
         participants=workflow.get("participants",[])
-        if not isinstance(nodes,list) or not isinstance(flows,list) or not isinstance(messages,list):return
+        processes=workflow.get("processes",[])
+        if not all(isinstance(value,list) for value in (nodes,flows,messages,processes)):return workflow
         used_node_ids={n.get("id") for n in nodes if isinstance(n,Mapping)}
         used_flow_ids={f.get("id") for f in flows if isinstance(f,Mapping)}
         message_endpoints={endpoint for m in messages if isinstance(m,Mapping) for endpoint in (m.get("source"),m.get("target"))}
@@ -201,10 +211,12 @@ class CanonicalWorkflowPreparer:
         message_targets={m.get("target") for m in messages if isinstance(m,Mapping)}
         participant_by_process={p.get("processRef"):p.get("id") for p in participants if isinstance(p,Mapping)}
 
-        for process_id in sorted(split_processes):
+        process_ids=sorted(p.get("id") for p in processes if isinstance(p,Mapping) and isinstance(p.get("id"),str))
+        for process_id in process_ids:
             local_nodes=[n for n in nodes if isinstance(n,dict) and n.get("processRef")==process_id]
             if not local_nodes:continue
             local_ids={n.get("id") for n in local_nodes}
+            if not (local_ids & message_endpoints):continue
             local_flows=[f for f in flows if isinstance(f,Mapping) and f.get("source") in local_ids and f.get("target") in local_ids]
             incoming={node_id:0 for node_id in local_ids};outgoing={node_id:0 for node_id in local_ids}
             for flow in local_flows:
@@ -216,13 +228,14 @@ class CanonicalWorkflowPreparer:
             if not starts:
                 start_id=cls._unique_id(f"start_{process_id}",used_node_ids);used_node_ids.add(start_id)
                 start=cls._technical_event(start_id,"startEvent",process_id,participant_by_process.get(process_id));nodes.append(start);starts=[start]
-                roots=[n for n in local_nodes if incoming.get(n.get("id"),0)==0 and
-                       (outgoing.get(n.get("id"),0)>0 or n.get("id") in message_endpoints)]
+                candidates=[n for n in local_nodes if incoming.get(n.get("id"),0)==0 and
+                            (outgoing.get(n.get("id"),0)>0 or n.get("id") in message_endpoints)]
+                roots=candidates if len(candidates)==1 else []
             else:
                 all_roots=[n for n in local_nodes if n.get("type")!="startEvent" and incoming.get(n.get("id"),0)==0]
-                eligible=[n for n in all_roots if n.get("id") in message_targets or n.get("id") in converted_targets or n.get("id") in isolated_message_ids]
+                eligible=[n for n in all_roots if n.get("id") in message_targets or n.get("id") in isolated_message_ids]
                 start_has_outgoing=outgoing.get(starts[0]["id"],0)>0
-                roots=eligible if len(eligible)==1 else (all_roots if not start_has_outgoing and len(all_roots)==1 else [])
+                roots=[] if start_has_outgoing else (eligible if len(eligible)==1 else (all_roots if len(all_roots)==1 else []))
             for root in roots:
                 cls._add_technical_flow(flows,used_flow_ids,starts[0]["id"],root["id"],process_id,report,"START_FLOW_ADDED")
                 incoming[root["id"]]=incoming.get(root["id"],0)+1
@@ -230,16 +243,67 @@ class CanonicalWorkflowPreparer:
             if not ends:
                 end_id=cls._unique_id(f"end_{process_id}",used_node_ids);used_node_ids.add(end_id)
                 end=cls._technical_event(end_id,"endEvent",process_id,participant_by_process.get(process_id));nodes.append(end);ends=[end]
-                sinks=[n for n in local_nodes if outgoing.get(n.get("id"),0)==0 and
-                       (incoming.get(n.get("id"),0)>0 or n.get("id") in message_endpoints)]
+                candidates=[n for n in local_nodes if outgoing.get(n.get("id"),0)==0 and
+                            (incoming.get(n.get("id"),0)>0 or n.get("id") in message_endpoints)]
+                sinks=candidates if len(candidates)==1 else []
                 if not roots and len(local_nodes)==1 and local_nodes[0].get("type")=="startEvent":sinks=local_nodes
             else:
                 all_sinks=[n for n in local_nodes if n.get("type")!="endEvent" and outgoing.get(n.get("id"),0)==0]
-                eligible=[n for n in all_sinks if n.get("id") in message_sources or n.get("id") in converted_sources or n.get("id") in isolated_message_ids]
+                eligible=[n for n in all_sinks if n.get("id") in message_sources or n.get("id") in isolated_message_ids]
                 end_has_incoming=incoming.get(ends[0]["id"],0)>0
-                sinks=eligible if len(eligible)==1 else (all_sinks if not end_has_incoming and len(all_sinks)==1 else [])
+                sinks=[] if end_has_incoming else (eligible if len(eligible)==1 else (all_sinks if len(all_sinks)==1 else []))
             for sink in sinks:
                 cls._add_technical_flow(flows,used_flow_ids,sink["id"],ends[0]["id"],process_id,report,"END_FLOW_ADDED")
+
+        # Stitch response chains whose order is already proved by collaboration
+        # causality (source -> message target -> local work -> message source ->
+        # target). Recompute degrees after every edge so each choice stays unique.
+        while True:
+            node_by_id={n.get("id"):n for n in nodes if isinstance(n,Mapping)}
+            combined={node_id:[] for node_id in node_by_id}
+            for edge in [*flows,*messages]:
+                if not isinstance(edge,Mapping):continue
+                source,target=edge.get("source"),edge.get("target")
+                if source in combined and target in combined:combined[source].append(target)
+            added=False
+            for process_id in process_ids:
+                local_ids={node_id for node_id,node in node_by_id.items() if node.get("processRef")==process_id}
+                incoming={node_id:0 for node_id in local_ids};outgoing={node_id:0 for node_id in local_ids}
+                for edge in flows:
+                    if not isinstance(edge,Mapping):continue
+                    source,target=edge.get("source"),edge.get("target")
+                    if source in local_ids and target in local_ids:
+                        outgoing[source]+=1;incoming[target]+=1
+                sinks=sorted(node_id for node_id in local_ids if node_id in message_sources and outgoing[node_id]==0)
+                roots={node_id for node_id in local_ids if node_id in message_targets and incoming[node_id]==0}
+                proposals=[]
+                for sink in sinks:
+                    distances=cls._causal_distances(sink,combined)
+                    candidates=[(distances[root],root) for root in roots if root in distances and root!=sink]
+                    if not candidates:continue
+                    minimum=min(distance for distance,_ in candidates)
+                    nearest=sorted(root for distance,root in candidates if distance==minimum)
+                    if len(nearest)==1:proposals.append((sink,nearest[0]))
+                # A target claimed by several equally valid local sinks is still
+                # ambiguous; leave it for semantic/model repair.
+                target_counts=Counter(target for _,target in proposals)
+                unambiguous=[pair for pair in proposals if target_counts[pair[1]]==1]
+                if unambiguous:
+                    source,target=sorted(unambiguous)[0]
+                    cls._add_technical_flow(flows,used_flow_ids,source,target,process_id,report,"COLLABORATION_CONTINUITY_FLOW_ADDED")
+                    added=True;break
+            if not added:break
+        return workflow
+
+    @staticmethod
+    def _causal_distances(source,adjacency):
+        distances={source:0};queue=[source]
+        while queue:
+            current=queue.pop(0)
+            for target in sorted(adjacency.get(current,[]),key=str):
+                if target in distances:continue
+                distances[target]=distances[current]+1;queue.append(target)
+        return distances
 
     @staticmethod
     def _technical_event(identifier,node_type,process_id,participant_id):

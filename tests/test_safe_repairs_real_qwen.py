@@ -271,3 +271,49 @@ def test_qwen_cuda_cache_cleanup_is_between_generations(monkeypatch):
     monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(cuda=fake_cuda))
     QwenWorkflowGenerator._release_cuda_cache()
     assert calls == ["empty"]
+
+
+def test_collaboration_endpoints_are_finalized_before_qwen_repair():
+    process_ids=("process_a","process_b","process_c")
+    participants=[{"id":f"participant_{suffix}","name":suffix.upper(),"processRef":process_id,"properties":{}}
+                  for suffix,process_id in zip(("a","b","c"),process_ids)]
+    kinds={
+        "a_start":"startEvent","a_send_1":"sendTask","a_receive_1":"receiveTask",
+        "a_send_2":"sendTask","a_receive_2":"receiveTask","a_end":"endEvent",
+        "b_start":"startEvent","b_receive_1":"receiveTask","b_work_1":"serviceTask",
+        "b_send_1":"sendTask","b_receive_2":"receiveTask","b_work_2":"serviceTask",
+        "b_send_c":"sendTask","b_receive_c":"receiveTask","b_send_2":"sendTask","b_end":"endEvent",
+        "c_start":"startEvent","c_receive":"receiveTask","c_work":"serviceTask","c_send":"sendTask","c_end":"endEvent",
+    }
+    owner={identifier:process_ids[ord(identifier[0])-ord("a")] for identifier in kinds}
+    participant_for={process_id:participants[index]["id"] for index,process_id in enumerate(process_ids)}
+    nodes=[{"id":identifier,"type":kind,"name":identifier,"processRef":owner[identifier],
+            "participantRef":participant_for[owner[identifier]],"laneRef":None,"actor":None,"properties":{}}
+           for identifier,kind in kinds.items()]
+    pairs=[
+        ("a_start","a_send_1"),("a_send_1","b_receive_1"),
+        ("b_receive_1","b_work_1"),("b_work_1","b_send_1"),("b_send_1","a_receive_1"),
+        ("a_receive_1","a_send_2"),("a_send_2","b_receive_2"),
+        ("b_receive_2","b_work_2"),("b_work_2","b_send_c"),("b_send_c","c_receive"),
+        ("c_start","c_receive"),("c_receive","c_work"),("c_work","c_send"),("c_send","b_receive_c"),
+        ("c_send","c_end"),("b_receive_c","b_send_2"),("b_send_2","a_receive_2"),
+        ("b_send_2","b_end"),("a_receive_2","a_end"),
+    ]
+    flows=[{"id":f"flow_{index}","source":source,"target":target,"processRef":owner[source],
+            "condition":None,"isDefault":False,"properties":{}}
+           for index,(source,target) in enumerate(pairs)]
+    workflow={"schemaVersion":"2.0","processes":[process(identifier) for identifier in process_ids],
+              "participants":participants,"lanes":[],"nodes":nodes,"flows":flows,
+              "messageFlows":[],"ambiguities":[]}
+    generator=QueueGenerator(workflow);compiler=WorkflowCompiler(generator,SCHEMA_PATH);compiler._bpmn_generator=XmlGenerator()
+    result=compiler.compile("generic A B C collaboration")
+    assert result["success"]
+    assert result["repair_report"]==[] and len(generator.prompts)==1
+    assert result["pipeline_debug"]["after_structural_repair"]==result["pipeline_debug"]["before_coverage_validation"]
+    assert result["pipeline_debug"]["after_structural_repair"]["processes"]==3
+    forbidden={"ISOLATED_TASK","MISSING_INCOMING_FLOW","MISSING_OUTGOING_FLOW","UNREACHABLE_NODE","NO_PATH_TO_END"}
+    assert forbidden.isdisjoint({issue["code"] for issue in result["semantic_errors"]})
+    fixed=result["normalized_workflow"]
+    local_pairs={(item["source"],item["target"]) for item in fixed["flows"]}
+    assert {("a_send_1","a_receive_1"),("a_send_2","a_receive_2"),
+            ("b_send_1","b_receive_2"),("b_send_c","b_receive_c")}.issubset(local_pairs)

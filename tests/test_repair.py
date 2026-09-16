@@ -32,6 +32,11 @@ def test_prompt_teaches_v2_only():
     prompt=WorkflowRepairer().build_repair_prompt(v1(False),ERROR);assert 'schemaVersion vaut exactement "2.0"' in prompt and "processRef" in prompt and "nodeRefs" in prompt and "N'utilise jamais participant.nodeRefs" in prompt
 def test_prompt_includes_error():
     assert "PROCESS_MISSING_END_EVENT" in WorkflowRepairer().build_repair_prompt(v1(False),ERROR)
+def test_structural_prompt_contains_only_unique_blocking_errors():
+    errors=[*ERROR,copy.deepcopy(ERROR[0]),{"code":"LOOP_DETECTED","message":"warning","severity":"warning"}]
+    prompt=WorkflowRepairer().build_repair_prompt(v1(False),errors,description="ignored",requirements={"activities":[{"name":"ignored"}]})
+    assert prompt.count("PROCESS_MISSING_END_EVENT")==1
+    assert "LOOP_DETECTED" not in prompt and "ignored" not in prompt
 def test_report_shape():
     _,report=WorkflowRepairer().repair(v1(False),ERROR,Queue(v1()));assert set(report[0])=={"attempt","status","input_errors","output_errors","message","accepted_candidate","errors_before","errors_after"}
 def test_invalid_generator_output_reported():

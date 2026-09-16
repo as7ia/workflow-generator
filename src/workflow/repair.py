@@ -74,7 +74,7 @@ class WorkflowRepairer:
             return current, report
 
         supplied_errors = copy.deepcopy(errors) if isinstance(errors, list) else []
-        prompt_errors = supplied_errors or copy.deepcopy(current_errors)
+        prompt_errors = self._prompt_errors(supplied_errors or current_errors)
         best = copy.deepcopy(current)
         best_score = self._score(current_errors)
 
@@ -98,7 +98,7 @@ class WorkflowRepairer:
                         "La tentative a échoué pendant l'appel au générateur.",
                     )
                 )
-                prompt_errors = current_errors
+                prompt_errors = self._prompt_errors(current_errors)
                 continue
 
             if not isinstance(generated, Mapping):
@@ -115,7 +115,7 @@ class WorkflowRepairer:
                         "La sortie du générateur a été ignorée car elle n'est pas un dictionnaire.",
                     )
                 )
-                prompt_errors = current_errors
+                prompt_errors = self._prompt_errors(current_errors)
                 continue
 
             prepared = self._preparer.prepare_and_validate(copy.deepcopy(dict(generated)))
@@ -164,7 +164,7 @@ class WorkflowRepairer:
                 current_structural=candidate_structural
                 current_coverage=candidate_coverage
                 current_errors = output_errors
-            prompt_errors = current_errors
+            prompt_errors = self._prompt_errors(current_errors)
 
         return best, report
 
@@ -180,7 +180,7 @@ class WorkflowRepairer:
             from generation.prompts import build_coverage_repair_prompt, build_repair_prompt
         if repair_kind == "coverage":
             return build_coverage_repair_prompt(workflow, errors, requirements or {})
-        return build_repair_prompt(workflow, errors, self._schema, description, requirements)
+        return build_repair_prompt(workflow, self._prompt_errors(errors), self._schema)
         """Previous prompt implementation retained below temporarily unreachable."""
         error_lines = []
         for error in errors if isinstance(errors, list) else []:
@@ -246,15 +246,34 @@ class WorkflowRepairer:
         return not any(error.get("severity", "error") == "error" for error in errors)
 
     @staticmethod
-    def _score(errors: list[RepairError]) -> tuple[int, int, int, int, int]:
-        """Rank blocking, critical structural, total issues, then warnings."""
-        blocking = sum(error.get("severity", "error") == "error" for error in errors)
-        structural_codes={"UNREACHABLE_NODE","ISOLATED_TASK","MISSING_INCOMING_FLOW","MISSING_OUTGOING_FLOW"}
-        structural=sum(error.get("severity","error")=="error" and error.get("code") in structural_codes for error in errors)
-        prefixes=("JSON_SCHEMA","MISSING_","PROCESS_MISSING","UNKNOWN_","FLOW_PROCESS","SEQUENCE_FLOW_CROSSES")
-        critical=sum(error.get("severity","error")=="error" and str(error.get("code","")).startswith(prefixes) for error in errors)
-        warnings=sum(error.get("severity")=="warning" for error in errors)
-        return blocking,structural,critical,len(errors),warnings
+    def _score(errors: list[RepairError]) -> tuple[int, ...]:
+        """Rank candidates using only generic blocking-error categories."""
+        blocking=[error for error in errors if error.get("severity","error")=="error"]
+        codes=[str(error.get("code","")) for error in blocking]
+        count=lambda code:sum(value==code for value in codes)
+        schema=sum(value.startswith("JSON_SCHEMA") for value in codes)
+        unknown=sum(value.startswith("UNKNOWN_") for value in codes)
+        tracked={"UNREACHABLE_NODE","ISOLATED_TASK","MISSING_INCOMING_FLOW",
+                 "MISSING_OUTGOING_FLOW","NO_PATH_TO_END"}
+        other=sum(value not in tracked and not value.startswith(("JSON_SCHEMA","UNKNOWN_")) for value in codes)
+        return (len(blocking),count("UNREACHABLE_NODE"),count("ISOLATED_TASK"),
+                count("MISSING_INCOMING_FLOW"),count("MISSING_OUTGOING_FLOW"),
+                count("NO_PATH_TO_END"),schema,unknown,other)
+
+    @staticmethod
+    def _prompt_errors(errors: list[RepairError]) -> list[RepairError]:
+        """Keep only unique blocking diagnostics for a compact Qwen prompt."""
+        result=[];seen=set()
+        for error in errors if isinstance(errors,list) else []:
+            if not isinstance(error,Mapping) or error.get("severity","error")!="error":continue
+            compact={key:copy.deepcopy(error[key]) for key in
+                     ("code","message","path","process_id","participant_id","lane_id","node_id","flow_id","severity")
+                     if key in error}
+            key=tuple((name,json.dumps(value,ensure_ascii=False,sort_keys=True,default=str))
+                      for name,value in sorted(compact.items()))
+            if key in seen:continue
+            seen.add(key);result.append(compact)
+        return result
 
     @staticmethod
     def _attempt(
