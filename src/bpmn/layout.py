@@ -16,6 +16,18 @@ from .constants import (BACK_EDGE_MARGIN, BRANCH_MARGIN, CANVAS_MARGIN,
     START_EVENT_HEIGHT, START_EVENT_WIDTH, SUBPROCESS_HEIGHT, SUBPROCESS_WIDTH,
     TASK_HEIGHT, TASK_WIDTH, VERTICAL_SPACING)
 
+def _rectangles_overlap(a,b,margin=0.0):
+    return (a["x"]<b["x"]+b["width"]+margin and a["x"]+a["width"]+margin>b["x"]
+        and a["y"]<b["y"]+b["height"]+margin and a["y"]+a["height"]+margin>b["y"])
+
+def detect_shape_collisions(shapes,margin=0.0):
+    """Return stable pairs of overlapping BPMN shapes."""
+    ids=sorted(shapes);collisions=[]
+    for index,shape_id in enumerate(ids):
+        for other_id in ids[index+1:]:
+            if _rectangles_overlap(shapes[shape_id],shapes[other_id],margin):collisions.append((shape_id,other_id))
+    return collisions
+
 class BPMNLayoutEngine:
     _TASK_TYPES={"userTask","serviceTask","manualTask","scriptTask","businessRuleTask","sendTask","receiveTask"}
     _GATEWAY_TYPES={"exclusiveGateway","parallelGateway","inclusiveGateway","eventBasedGateway"}
@@ -91,10 +103,12 @@ class BPMNLayoutEngine:
         messages=self._message_connections(collaboration)
         global_channels={fid:value for pid in sorted(process_layout) for fid,value in process_layout[pid]["back_edge_channels"].items()}
         warnings=sorted(self._warnings,key=lambda w:tuple(str(w.get(k) or "") for k in ("code","process_id","node_id","container_id")))
+        shape_collisions=detect_shape_collisions(nodes)
         return {"processes":process_layout,"participants":{k:participant_layout[k] for k in sorted(participant_layout)},
             "lanes":{k:lane_layout[k] for k in sorted(lane_layout)},"nodes":{k:nodes[k] for k in sorted(nodes)},
             "metadata":{"orientation":"horizontal","width":width,"height":height,"warnings":warnings,
-                "back_edge_channels":global_channels,"message_flow_connections":messages}}
+                "back_edge_channels":global_channels,"message_flow_connections":messages,
+                "layout_metrics":{"shape_collisions":len(shape_collisions),"back_edges":len(global_channels),"message_flows":len(messages)}}}
 
     def _place_group(self,ids,nodes,top,left,pitch):
         if not ids: return float(LANE_MIN_HEIGHT)
@@ -166,7 +180,7 @@ class BPMNLayoutEngine:
     @staticmethod
     def _index(raw): return {x["id"]:dict(x) for x in raw if isinstance(x,Mapping) and isinstance(x.get("id"),str)} if isinstance(raw,list) else {}
     @staticmethod
-    def _overlap(a,b): return a["x"]<b["x"]+b["width"] and a["x"]+a["width"]>b["x"] and a["y"]<b["y"]+b["height"] and a["y"]+a["height"]>b["y"]
+    def _overlap(a,b): return _rectangles_overlap(a,b)
     @staticmethod
     def _contains(a,b): return b["x"]>=a["x"] and b["y"]>=a["y"] and b["x"]+b["width"]<=a["x"]+a["width"] and b["y"]+b["height"]<=a["y"]+a["height"]
     def _validate(self,nodes,participants,lanes):

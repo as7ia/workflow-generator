@@ -4,7 +4,7 @@ import xml.etree.ElementTree as ET
 from collections.abc import Mapping
 from typing import Any
 from .constants import BPMN_NS,BPMNDI_NS,DC_NS,NODE_TAGS
-from .routing import calculate_edge_waypoints,create_edge_waypoints
+from .routing import calculate_routes,create_edge_waypoints
 from .xml_helpers import add_condition,add_edge_label,get_flow_label,tag
 
 class BPMNGenerator:
@@ -39,7 +39,7 @@ class BPMNGenerator:
         plane_element=collaboration_id or first_process
         self._create_diagram(definitions,plane_element,first_process,node_geometry,
             {k:v for k,v in participant_geometry.items() if k in participants},
-            {k:v for k,v in lane_geometry.items() if k in lanes},sequence,message)
+            {k:v for k,v in lane_geometry.items() if k in lanes},sequence,message,layout)
         return ET.tostring(definitions,encoding="unicode",xml_declaration=True)
 
     @staticmethod
@@ -123,15 +123,15 @@ class BPMNGenerator:
         return result
 
     @staticmethod
-    def _create_diagram(definitions,plane_element,base_id,nodes,participants,lanes,flows,messages):
+    def _create_diagram(definitions,plane_element,base_id,nodes,participants,lanes,flows,messages,layout):
         diagram=ET.SubElement(definitions,tag(BPMNDI_NS,"BPMNDiagram"),{"id":f"BPMNDiagram_{base_id}"});plane=ET.SubElement(diagram,tag(BPMNDI_NS,"BPMNPlane"),{"id":f"BPMNPlane_{base_id}","bpmnElement":plane_element})
         for collection,prefix,horizontal in ((participants,"Participant",True),(lanes,"Lane",True),(nodes,"Shape",False)):
             for iid,rect in sorted(collection.items()):
                 attrs={"id":f"{prefix}_{iid}","bpmnElement":iid}
                 if horizontal:attrs["isHorizontal"]="true"
                 shape=ET.SubElement(plane,tag(BPMNDI_NS,"BPMNShape"),attrs);ET.SubElement(shape,tag(DC_NS,"Bounds"),{k:str(rect[k]) for k in ("x","y","width","height")})
-        geometry={**participants,**nodes}
+        geometry={**participants,**nodes};routes=calculate_routes(flows,messages,geometry,layout)
         for flow in [*flows,*messages]:
             source,target=str(flow["source"]),str(flow["target"])
             if source not in geometry or target not in geometry:raise ValueError(f"Géométrie absente pour le flux '{flow.get('id')}'.")
-            waypoints=calculate_edge_waypoints(source,target,geometry);edge=ET.SubElement(plane,tag(BPMNDI_NS,"BPMNEdge"),{"id":f"Edge_{flow['id']}","bpmnElement":str(flow["id"])});create_edge_waypoints(edge,waypoints);add_edge_label(edge,flow,waypoints)
+            waypoints=routes[str(flow["id"])];edge=ET.SubElement(plane,tag(BPMNDI_NS,"BPMNEdge"),{"id":f"Edge_{flow['id']}","bpmnElement":str(flow["id"])});create_edge_waypoints(edge,waypoints);add_edge_label(edge,flow,waypoints)

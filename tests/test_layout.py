@@ -84,3 +84,15 @@ def test_workflow_immutability():
     nodes,flows=chain();w=model(nodes=nodes,flows=flows);before=copy.deepcopy(w);layout(w);assert w==before
 def test_analysis_immutability():
     nodes,flows=chain();w=model(nodes=nodes,flows=flows);analysis=WorkflowGraphAnalyzer().analyze(w);before=copy.deepcopy(analysis);BPMNLayoutEngine().layout(w,analysis);assert analysis==before
+
+def test_lanes_adapt_to_different_content_heights():
+    nodes=[node("g",participant="pa",lane="la",t="parallelGateway")]+[node(x,participant="pa",lane="la") for x in "abc"]+[node("z",participant="pa",lane="lb")]
+    flows=[flow(str(i),"g",target) for i,target in enumerate("abc")]
+    out=layout(model(nodes=nodes,flows=flows,participants=[participant("pa","p1")],lanes=[lane("la","p1","pa"),lane("lb","p1","pa")]))
+    assert out["lanes"]["la"]["height"]>out["lanes"]["lb"]["height"]
+    assert all(contains(out["lanes"][entry["lane_id"]],entry) for entry in out["nodes"].values())
+
+def test_large_workflow_has_no_shape_collision():
+    nodes=[node(f"n{i}") for i in range(300)];flows=[flow(f"f{i}",f"n{i}",f"n{i+1}") for i in range(299)]
+    out=layout(model(nodes=nodes,flows=flows))
+    assert out["metadata"]["layout_metrics"]["shape_collisions"]==0
