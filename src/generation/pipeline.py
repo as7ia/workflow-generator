@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import inspect
 import json
 from collections.abc import Mapping
@@ -18,6 +19,7 @@ try:
         WorkflowRepairer,
         CoverageValidator,
         normalize_semantic_requirements,
+        validate_requirements_against_description,
     )
 except ImportError:  # pragma: no cover - supports PYTHONPATH=src notebooks.
     from bpmn import BPMNGenerator, BPMNLayoutEngine
@@ -28,6 +30,7 @@ except ImportError:  # pragma: no cover - supports PYTHONPATH=src notebooks.
         WorkflowRepairer,
         CoverageValidator,
         normalize_semantic_requirements,
+        validate_requirements_against_description,
     )
 
 from .prompts import build_generation_prompt, build_semantic_requirements_prompt
@@ -103,6 +106,11 @@ class WorkflowCompiler:
     def compile(self, description: str) -> CompilationResult:
         """Compile one natural-language description without leaking exceptions."""
         result = self._empty_result(description)
+        encoded_description = description.encode("utf-8")
+        result["pipeline_debug"]["input"] = {
+            "description_length": len(description),
+            "description_sha256": hashlib.sha256(encoded_description).hexdigest(),
+        }
         try:
             schema = json.loads(self.schema_path.read_text(encoding="utf-8"))
             if not isinstance(schema, dict):
@@ -114,13 +122,15 @@ class WorkflowCompiler:
             requirements_prompt=build_semantic_requirements_prompt(description)
             extracted=self._call_generator(result,"semantic_requirement",requirements_prompt)
             requirements,requirement_issues=normalize_semantic_requirements(extracted)
+            requirements,fidelity_issues=validate_requirements_against_description(requirements,description)
             result["semantic_requirements"]=requirements
+            result["warnings"].extend(fidelity_issues)
             if requirement_issues:return self._fail(result,"requirements_extraction",requirement_issues[0]["message"])
         except Exception as exc:
             return self._fail(result,"requirements_extraction",exc)
 
         try:
-            prompt = build_generation_prompt(description, schema)
+            prompt = build_generation_prompt(description, schema, requirements)
             generate_json = getattr(self.generator, "generate_json", None)
             if not callable(generate_json):
                 raise TypeError(
@@ -206,6 +216,10 @@ class WorkflowCompiler:
 
         result["pipeline_debug"]["after_structural_repair"] = self._workflow_counts(current_workflow)
         result["pipeline_debug"]["before_coverage_validation"] = self._workflow_counts(current_workflow)
+        result["pipeline_debug"]["semantic_requirements_summary"] = {
+            key: len(requirements.get(key, []))
+            for key in ("participants","lanes","timers","parallelisms","decisions","interactions","activities")
+        }
         result["coverage_errors"]=CoverageValidator().validate(requirements,current_workflow)
         blocking=self._blocking_errors(result["coverage_errors"])
         if blocking:
@@ -351,6 +365,7 @@ class WorkflowCompiler:
                 "last_coverage_repair_prompt_chars": None,
             },
             "pipeline_debug": {
+                "input": None,
                 "generation": {"raw_text_length": None,"json_extracted": False,"parse_success": False},
                 "after_qwen_parse": None,
                 "after_normalization": None,
@@ -359,6 +374,7 @@ class WorkflowCompiler:
                 "before_coverage_validation": None,
                 "coverage_candidate": None,
                 "final_current_workflow": None,
+                "semantic_requirements_summary": None,
             },
         }
 
@@ -393,9 +409,14 @@ class WorkflowCompiler:
             supports_limit = "max_new_tokens" in inspect.signature(generate_json).parameters
         except (TypeError, ValueError):
             supports_limit = False
-        if supports_limit:
-            return generate_json(prompt, max_new_tokens=token_limit)
-        return generate_json(prompt)
+        generated = (
+            generate_json(prompt, max_new_tokens=token_limit)
+            if supports_limit
+            else generate_json(prompt)
+        )
+        if not isinstance(generated, Mapping):
+            raise TypeError("Le générateur doit retourner un dictionnaire JSON.")
+        return dict(generated)
 
     @staticmethod
     def _workflow_counts(workflow: Mapping[str, Any]) -> dict[str, int]:

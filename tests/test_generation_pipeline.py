@@ -167,7 +167,7 @@ def test_rejected_coverage_candidate_does_not_replace_structural_success():
     req=empty_requirements(participants=[{"name":name} for name in participant_names],activities=[{"name":"Missing required step"}])
     g=CoverageGenerator(req,broken,structural,invalid)
     c=WorkflowCompiler(g,SCHEMA,max_repair_attempts=1);c._bpmn_generator=Xml()
-    result=c.compile("critical state propagation")
+    result=c.compile("Client, Entreprise and Banque perform the missing required step during critical state propagation")
     assert result["error"]["stage"]=="coverage_repair"
     assert len(result["normalized_workflow"]["participants"])==3
     assert len(result["normalized_workflow"]["nodes"])==12
