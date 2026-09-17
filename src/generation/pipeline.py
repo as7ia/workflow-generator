@@ -20,6 +20,7 @@ try:
         CoverageValidator,
         normalize_semantic_requirements,
         validate_requirements_against_description,
+        is_meaningful_workflow,
     )
 except ImportError:  # pragma: no cover - supports PYTHONPATH=src notebooks.
     from bpmn import BPMNGenerator, BPMNLayoutEngine
@@ -31,6 +32,7 @@ except ImportError:  # pragma: no cover - supports PYTHONPATH=src notebooks.
         CoverageValidator,
         normalize_semantic_requirements,
         validate_requirements_against_description,
+        is_meaningful_workflow,
     )
 
 from .prompts import build_generation_prompt, build_semantic_requirements_prompt
@@ -122,7 +124,9 @@ class WorkflowCompiler:
             requirements_prompt=build_semantic_requirements_prompt(description)
             extracted=self._call_generator(result,"semantic_requirement",requirements_prompt)
             requirements,requirement_issues=normalize_semantic_requirements(extracted)
+            result["pipeline_debug"]["semantic_requirements_before_validation"]=self._requirements_counts(requirements)
             requirements,fidelity_issues=validate_requirements_against_description(requirements,description)
+            result["pipeline_debug"]["semantic_requirements_after_validation"]=self._requirements_counts(requirements)
             result["semantic_requirements"]=requirements
             result["warnings"].extend(fidelity_issues)
             if requirement_issues:return self._fail(result,"requirements_extraction",requirement_issues[0]["message"])
@@ -178,6 +182,7 @@ class WorkflowCompiler:
 
         if blocking:
             try:
+                base_workflow=copy.deepcopy(current_workflow)
                 repairer = WorkflowRepairer(
                     max_attempts=self.max_structural_repair_attempts, schema=schema
                 )
@@ -187,6 +192,12 @@ class WorkflowCompiler:
                     generator=_PhaseGenerator(self,result,"structural_repair"),
                     workflow_is_prepared=True,
                 )
+                result["pipeline_debug"]["structural_repair_candidate"]=next((
+                    attempt.get("candidate_counts") for attempt in reversed(repair_report)
+                    if attempt.get("candidate_counts") is not None
+                ),None) or self._workflow_counts(repaired_workflow)
+                if not is_meaningful_workflow(repaired_workflow,base_workflow):
+                    repaired_workflow=base_workflow
                 prepared = preparer.validate_prepared(repaired_workflow)
                 accepted_workflow = copy.deepcopy(prepared["workflow"])
                 result["warnings"].extend(
@@ -267,6 +278,9 @@ class WorkflowCompiler:
                 return result
 
         result["pipeline_debug"]["final_current_workflow"] = self._workflow_counts(current_workflow)
+        if not is_meaningful_workflow(current_workflow):
+            result["normalized_workflow"]=copy.deepcopy(current_workflow)
+            return self._fail(result,"repair","Le dernier workflow accepté ne contient aucun contenu exploitable.")
         try:
             result["analysis"] = self._analyzer.analyze(current_workflow)
         except Exception as exc:
@@ -370,11 +384,14 @@ class WorkflowCompiler:
                 "after_qwen_parse": None,
                 "after_normalization": None,
                 "after_initial_prepare": None,
+                "structural_repair_candidate": None,
                 "after_structural_repair": None,
                 "before_coverage_validation": None,
                 "coverage_candidate": None,
                 "final_current_workflow": None,
                 "semantic_requirements_summary": None,
+                "semantic_requirements_before_validation": None,
+                "semantic_requirements_after_validation": None,
             },
         }
 
@@ -426,13 +443,14 @@ class WorkflowCompiler:
         }
 
     @staticmethod
+    def _requirements_counts(requirements: Mapping[str,Any])->dict[str,int]:
+        return {key:len(requirements.get(key,[])) if isinstance(requirements.get(key),list) else 0
+                for key in ("participants","lanes","timers","parallelisms","decisions","interactions","activities","ambiguities")}
+
+    @staticmethod
     def is_meaningful_workflow(workflow: Mapping[str,Any]) -> bool:
         """Return whether generation contains at least one real BPMN node."""
-        if not isinstance(workflow,Mapping):return False
-        nodes=workflow.get("nodes")
-        return (isinstance(nodes,list) and bool(nodes) and
-                any(isinstance(node,Mapping) and isinstance(node.get("type"),str) and node["type"].strip()
-                    for node in nodes))
+        return is_meaningful_workflow(workflow)
 
     def _generation_metadata(self,success:bool,cause:Exception|None=None)->dict[str,Any]:
         metadata=getattr(self.generator,"last_generation_metadata",None)

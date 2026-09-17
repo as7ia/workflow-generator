@@ -70,6 +70,7 @@ def normalize_semantic_requirements(raw):
 def validate_requirements_against_description(requirements,description):
     """Remove only requirements with no defensible support in the description."""
     result=copy.deepcopy(dict(requirements)) if isinstance(requirements,Mapping) else SemanticRequirements().to_dict()
+    before=copy.deepcopy(result)
     text=str(description or "");description_tokens=_content_tokens(text);issues=[]
     ambiguities=list(result.get("ambiguities",[]))
     explicit_durations=set(_description_durations(text))
@@ -77,22 +78,27 @@ def validate_requirements_against_description(requirements,description):
     def reject(kind,item,reason):
         ambiguities.append({"message":reason,"requirement":copy.deepcopy(item)})
         issues.append(_issue("UNSUPPORTED_SEMANTIC_REQUIREMENT",reason,"warning"))
+    def warn(item,reason):
+        ambiguities.append({"message":reason,"requirement":copy.deepcopy(item)})
+        issues.append(_issue("SEMANTIC_REQUIREMENT_UNCERTAIN",reason,"warning"))
 
     declared_lane_names={_norm(item.get("name")) for item in result.get("lanes",[]) if isinstance(item,Mapping)}
     supported_participants=[]
     for item in result.get("participants",[]):
         if _norm(item.get("name")) in declared_lane_names:
             reject("participants",item,"Internal lane role must not be duplicated as a participant.")
-        elif _lexically_supported(item.get("name"),description_tokens):supported_participants.append(item)
-        else:reject("participants",item,"Participant absent from the user description.")
+        else:
+            supported_participants.append(item)
+            if not _lexically_supported(item.get("name"),description_tokens):warn(item,"Participant support is uncertain; requirement was preserved.")
     result["participants"]=supported_participants
     participant_names={_norm(item.get("name")) for item in supported_participants}
 
     supported_lanes=[]
     for item in result.get("lanes",[]):
-        if (_lexically_supported(item.get("name"),description_tokens) and
-                _norm(item.get("participant")) in participant_names):supported_lanes.append(item)
-        else:reject("lanes",item,"Lane or owning participant absent from the user description.")
+        if _norm(item.get("participant")) in participant_names:
+            supported_lanes.append(item)
+            if not _lexically_supported(item.get("name"),description_tokens):warn(item,"Lane wording is not explicit; requirement was preserved.")
+        else:warn(item,"Lane ownership is uncertain; requirement was preserved.");supported_lanes.append(item)
     result["lanes"]=supported_lanes
 
     supported_timers=[]
@@ -103,32 +109,29 @@ def validate_requirements_against_description(requirements,description):
         else:reject("timers",item,"Timer value absent from the user description.")
     result["timers"]=supported_timers
 
-    supported_activities=[]
     for item in result.get("activities",[]):
-        if _lexically_supported(item.get("name"),description_tokens):supported_activities.append(item)
-        else:reject("activities",item,"Activity absent from the user description.")
-    result["activities"]=supported_activities
+        if not _lexically_supported(item.get("name"),description_tokens):warn(item,"Activity may be a paraphrase; requirement was preserved.")
 
-    supported_interactions=[]
     for item in result.get("interactions",[]):
         endpoints=(item.get("source"),item.get("target"))
-        if all(_norm(value) in participant_names or _lexically_supported(value,description_tokens) for value in endpoints):supported_interactions.append(item)
-        else:reject("interactions",item,"Interaction endpoint absent from the user description.")
-    result["interactions"]=supported_interactions
+        if not all(_norm(value) in participant_names or _lexically_supported(value,description_tokens) for value in endpoints):warn(item,"Interaction wording is uncertain; requirement was preserved.")
 
     supported_parallelisms=[]
     for item in result.get("parallelisms",[]):
         branches=item.get("branches",[]) if isinstance(item,Mapping) else []
-        if len(branches)>=2 and all(_lexically_supported(branch.get("activity"),description_tokens) for branch in branches if isinstance(branch,Mapping)):supported_parallelisms.append(item)
-        else:reject("parallelisms",item,"Parallel branches are not supported by the user description.")
+        if _explicitly_sequential(text) and not _explicit_parallel(text):
+            reject("parallelisms",item,"Description explicitly orders these activities sequentially.")
+        else:
+            supported_parallelisms.append(item)
+            if not all(_lexically_supported(branch.get("activity"),description_tokens) for branch in branches if isinstance(branch,Mapping)):warn(item,"Parallel branch wording is uncertain; requirement was preserved.")
     result["parallelisms"]=supported_parallelisms
 
-    supported_decisions=[]
     for item in result.get("decisions",[]):
         terms=[item.get("name"),*(item.get("outcomes",[]) if isinstance(item.get("outcomes"),list) else [])]
-        if any(_lexically_supported(term,description_tokens) for term in terms):supported_decisions.append(item)
-        else:reject("decisions",item,"Decision absent from the user description.")
-    result["decisions"]=supported_decisions
+        if not any(_lexically_supported(term,description_tokens) for term in terms):warn(item,"Decision wording is uncertain; requirement was preserved.")
+    for kind in ("participants","activities"):
+        if before.get(kind) and not result.get(kind):
+            issues.append(_issue("SEMANTIC_REQUIREMENTS_OVERFILTERED",f"Validation removed every {kind} requirement.","warning"))
     result["ambiguities"]=_dedupe(ambiguities,lambda x:_norm(x.get("message") or x.get("requirement")))
     return SemanticRequirements(**{key:list(result.get(key,[])) for key in KEYS}).to_dict(),issues
 def _items(value,key,issues):
@@ -168,6 +171,8 @@ def _content_tokens(value):
 def _lexically_supported(value,description_tokens):
     tokens=_content_tokens(value)
     return bool(tokens and tokens&description_tokens)
+def _explicit_parallel(value):return bool(re.search(r"\b(parallel|parallele|parallèlement|simultaneous|simultaneously|simultanement|en même temps)\b",str(value),re.I))
+def _explicitly_sequential(value):return bool(re.search(r"\b(then|puis|ensuite|after|après)\b",str(value),re.I))
 def _valid_timer_value(kind,value):
     text=str(value or "").strip()
     if kind=="duration":return bool(re.fullmatch(r"P(?=.+)(?:\d+(?:\.\d+)?[YMWD])*(?:T(?:\d+(?:\.\d+)?[HMS])+)?",text))

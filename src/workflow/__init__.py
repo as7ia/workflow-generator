@@ -8,6 +8,7 @@ from .semantic_validator import SemanticValidator
 from .semantic_requirements import (SemanticRequirements,
     normalize_semantic_requirements,validate_requirements_against_description)
 from .coverage_validator import CoverageValidator
+from .meaningful import is_meaningful_workflow
 
 __all__ = [
     "SemanticValidator",
@@ -19,4 +20,5 @@ __all__ = [
     "normalize_semantic_requirements",
     "validate_requirements_against_description",
     "CoverageValidator",
+    "is_meaningful_workflow",
 ]

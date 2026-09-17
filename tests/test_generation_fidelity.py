@@ -42,6 +42,8 @@ def test_successive_compilations_are_isolated_in_both_orders(order):
         description=f"Actor {value} performs Activity {value}.";before=len(generator.prompts);result=compiler.compile(description);results.append(result)
         assert result["success"] and all(description in prompt for prompt in generator.prompts[before:before+2])
         assert result["pipeline_debug"]["input"]=={"description_length":len(description),"description_sha256":hashlib.sha256(description.encode()).hexdigest()}
+        assert result["pipeline_debug"]["semantic_requirements_before_validation"]["participants"]==1
+        assert result["pipeline_debug"]["semantic_requirements_after_validation"]["participants"]==1
     second=json_text(results[1]);assert order[0] not in second and order[1] in second
 
 def json_text(result):
@@ -83,3 +85,25 @@ def test_prompts_isolate_the_exact_description_and_validated_requirements():
         assert f"<USER_DESCRIPTION>\n{description}\n</USER_DESCRIPTION>" in prompt
         assert "derived ONLY" in prompt and "Do not invent" in prompt
     assert "<VALIDATED_SEMANTIC_REQUIREMENTS>" in generation
+
+def test_rich_requirements_are_not_emptied_by_conservative_validation():
+    description=("Organization North has internal roles Intake and Review. Intake receives a case and Review checks completeness. "
+        "After waiting two days, Review decides accepted or rejected while Notify and Archive run simultaneously. North informs Actor South.")
+    result,_=validate(description,participants=[{"name":"Organization North"},{"name":"Actor South"}],
+        lanes=[{"name":"Intake","participant":"Organization North"},{"name":"Review","participant":"Organization North"}],
+        timers=[{"value":"P2D"}],parallelisms=[{"branches":[{"activity":"Notify"},{"activity":"Archive"}]}],
+        decisions=[{"name":"Completeness decision","outcomes":["accepted","rejected"]}],
+        interactions=[{"source":"Organization North","target":"Actor South"}],activities=[{"name":"Receive case"},{"name":"Completeness verification"}])
+    assert all(result[key] for key in ("participants","lanes","timers","parallelisms","decisions","interactions","activities"))
+
+def test_paraphrased_activity_and_close_participant_are_preserved():
+    result,issues=validate("The reception service verifies whether the supplied information is complete.",
+        participants=[{"name":"Reception"}],activities=[{"name":"Completeness verification"}])
+    assert result["participants"] and result["activities"]
+    assert all(issue["severity"]=="warning" for issue in issues)
+
+def test_complete_participant_filtering_is_diagnosed():
+    result,issues=validate("Reviewer is an internal role inside an unspecified organization.",
+        participants=[{"name":"Reviewer"}],lanes=[{"name":"Reviewer","participant":"Unspecified organization"}])
+    assert result["participants"]==[]
+    assert "SEMANTIC_REQUIREMENTS_OVERFILTERED" in {issue["code"] for issue in issues}

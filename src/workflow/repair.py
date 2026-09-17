@@ -16,6 +16,7 @@ from typing import Any, Protocol
 
 from .preparation import CanonicalWorkflowPreparer
 from .coverage_validator import CoverageValidator
+from .meaningful import is_meaningful_workflow
 
 
 RepairError = dict[str, Any]
@@ -68,6 +69,10 @@ class WorkflowRepairer:
         current_structural = prepared["errors"]
         current_coverage = CoverageValidator().validate(requirements or {},current)
         current_errors = [*current_structural,*current_coverage]
+        if not is_meaningful_workflow(current):
+            current_errors.append(self._pipeline_error(
+                "MEANINGLESS_WORKFLOW_CANDIDATE","Le workflow ne contient aucun process ou node exploitable."
+            ))
         report: list[RepairAttempt] = []
 
         if self._is_valid(current_errors):
@@ -125,6 +130,24 @@ class WorkflowRepairer:
             candidate_structural=prepared["errors"]
             candidate_coverage=CoverageValidator().validate(requirements or {},candidate)
             output_errors = [*candidate_structural,*candidate_coverage]
+            candidate_counts=self._workflow_counts(candidate)
+            if not is_meaningful_workflow(candidate,current):
+                failure=self._pipeline_error(
+                    "MEANINGLESS_WORKFLOW_CANDIDATE",
+                    "Le candidat de réparation ne contient aucun process ou node exploitable.",
+                )
+                rejected_errors=[*output_errors,failure]
+                coverage_diagnostic=(self._coverage_diagnostic(
+                    current_structural,candidate_structural,current_coverage,candidate_coverage,False,candidate
+                ) if repair_kind=="coverage" else None)
+                report.append(self._attempt(
+                    attempt,"failed",input_errors,rejected_errors,
+                    "Le candidat vide ou sans contenu exploitable a été rejeté.",False,
+                    self._error_count(current_errors),coverage_diagnostic,
+                    candidate_counts=candidate_counts if repair_kind!="coverage" else None,
+                ))
+                prompt_errors=self._prompt_errors(current_errors)
+                continue
             candidate_score = self._score(output_errors)
             current_score = self._score(current_errors)
             accepted_candidate = (self._coverage_candidate_acceptable(current,candidate,current_structural,candidate_structural,current_coverage,candidate_coverage)
@@ -239,6 +262,7 @@ class WorkflowRepairer:
         accepted_candidate: bool = False,
         errors_before: int | None = None,
         coverage_repair: dict[str, Any] | None = None,
+        candidate_counts: dict[str,int] | None = None,
     ) -> RepairAttempt:
         """Build one stable attempt report entry."""
         return {
@@ -251,7 +275,13 @@ class WorkflowRepairer:
             "errors_before": errors_before if errors_before is not None else WorkflowRepairer._error_count(input_errors),
             "errors_after": WorkflowRepairer._error_count(output_errors),
             **({"coverage_repair": copy.deepcopy(coverage_repair)} if coverage_repair is not None else {}),
+            **({"candidate_counts": copy.deepcopy(candidate_counts)} if candidate_counts is not None else {}),
         }
+
+    @staticmethod
+    def _workflow_counts(workflow):
+        return {key:len(workflow.get(key,[])) if isinstance(workflow,Mapping) and isinstance(workflow.get(key),list) else 0
+                for key in ("processes","participants","lanes","nodes","flows","messageFlows")}
 
     @staticmethod
     def _error_count(errors: list[RepairError]) -> int:
