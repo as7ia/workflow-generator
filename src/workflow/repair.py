@@ -125,7 +125,19 @@ class WorkflowRepairer:
                 prompt_errors = self._prompt_errors(current_errors)
                 continue
 
-            prepared = self._preparer.prepare_and_validate(copy.deepcopy(dict(generated)))
+            candidate_raw=copy.deepcopy(dict(generated))
+            if not is_meaningful_workflow(candidate_raw,current):
+                report.append(self._meaningless_attempt(attempt,input_errors,[],candidate_raw,current_errors,repair_kind,
+                    current_structural,current_coverage))
+                prompt_errors=self._prompt_errors(current_errors)
+                continue
+            candidate_normalized,normalization_report=self._preparer.normalizer.normalize_with_report(candidate_raw)
+            if not is_meaningful_workflow(candidate_normalized,current):
+                report.append(self._meaningless_attempt(attempt,input_errors,[],candidate_normalized,current_errors,repair_kind,
+                    current_structural,current_coverage))
+                prompt_errors=self._prompt_errors(current_errors)
+                continue
+            prepared = self._preparer.prepare_normalized_and_validate(candidate_normalized,normalization_report)
             candidate = prepared["workflow"]
             candidate_structural=prepared["errors"]
             candidate_coverage=CoverageValidator().validate(requirements or {},candidate)
@@ -251,6 +263,22 @@ class WorkflowRepairer:
         name = type(error).__name__.lower()
         message = str(error).lower()
         return ("outofmemory" in name or "out of memory" in message) and "cuda" in message
+
+    def _meaningless_attempt(self,attempt,input_errors,output_errors,candidate,current_errors,repair_kind,
+                             current_structural,current_coverage,candidate_structural=None,candidate_coverage=None):
+        failure=self._pipeline_error("EMPTY_REPAIR_CANDIDATE",
+            "Le candidat de réparation ne contient aucun process ou node exploitable.")
+        rejected_errors=[*copy.deepcopy(output_errors),failure]
+        coverage_diagnostic=None
+        if repair_kind=="coverage":
+            coverage_diagnostic=self._coverage_diagnostic(current_structural,candidate_structural or [],
+                current_coverage,candidate_coverage or [],False,candidate)
+        entry=self._attempt(attempt,"rejected",input_errors,rejected_errors,
+            "Le candidat vide ou détruit a été rejeté avant comparaison des scores.",False,
+            self._error_count(current_errors),coverage_diagnostic,
+            candidate_counts=self._workflow_counts(candidate) if repair_kind!="coverage" else None)
+        entry["reason"]="EMPTY_REPAIR_CANDIDATE"
+        return entry
 
     @staticmethod
     def _attempt(

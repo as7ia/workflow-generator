@@ -196,9 +196,20 @@ class WorkflowCompiler:
                     attempt.get("candidate_counts") for attempt in reversed(repair_report)
                     if attempt.get("candidate_counts") is not None
                 ),None) or self._workflow_counts(repaired_workflow)
-                if not is_meaningful_workflow(repaired_workflow,base_workflow):
+                candidate_accepted=any(
+                    attempt.get("accepted_candidate") is True for attempt in repair_report
+                )
+                if not candidate_accepted or not is_meaningful_workflow(repaired_workflow,base_workflow):
+                    if candidate_accepted:self._reject_structural_report_candidate(repair_report)
                     repaired_workflow=base_workflow
+                    candidate_accepted=False
                 prepared = preparer.validate_prepared(repaired_workflow)
+                if not is_meaningful_workflow(prepared["workflow"],base_workflow):
+                    self._reject_structural_report_candidate(repair_report)
+                    repaired_workflow=base_workflow
+                    prepared=preparer.validate_prepared(base_workflow)
+                    candidate_accepted=False
+                result["pipeline_debug"]["structural_repair_candidate_accepted"]=candidate_accepted
                 accepted_workflow = copy.deepcopy(prepared["workflow"])
                 result["warnings"].extend(
                     entry
@@ -385,6 +396,7 @@ class WorkflowCompiler:
                 "after_normalization": None,
                 "after_initial_prepare": None,
                 "structural_repair_candidate": None,
+                "structural_repair_candidate_accepted": None,
                 "after_structural_repair": None,
                 "before_coverage_validation": None,
                 "coverage_candidate": None,
@@ -446,6 +458,16 @@ class WorkflowCompiler:
     def _requirements_counts(requirements: Mapping[str,Any])->dict[str,int]:
         return {key:len(requirements.get(key,[])) if isinstance(requirements.get(key),list) else 0
                 for key in ("participants","lanes","timers","parallelisms","decisions","interactions","activities","ambiguities")}
+
+    @staticmethod
+    def _reject_structural_report_candidate(report:list[dict[str,Any]])->None:
+        for attempt in reversed(report):
+            if attempt.get("accepted_candidate") is True:
+                attempt["accepted_candidate"]=False
+                attempt["status"]="rejected"
+                attempt["reason"]="EMPTY_REPAIR_CANDIDATE"
+                attempt["message"]="Le candidat vide ou détruit a été rejeté par le compilateur."
+                break
 
     @staticmethod
     def is_meaningful_workflow(workflow: Mapping[str,Any]) -> bool:
