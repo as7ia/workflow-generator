@@ -1,4 +1,4 @@
-from src.workflow.coverage_validator import CoverageValidator,normalize_semantic_label,semantic_label_match
+from src.workflow.coverage_validator import CoverageValidator,normalize_semantic_label,normalize_semantic_tokens,semantic_label_match
 from src.workflow.semantic_requirements import normalize_semantic_requirements
 
 def node(i,name,t="serviceTask",participant=None,properties=None):
@@ -151,11 +151,14 @@ def test_malformed_requirements_become_ambiguities_not_blocking_errors():
 
 def test_multilingual_semantic_label_matching_is_controlled():
     assert normalize_semantic_label("Réception de la demande") == "receive request"
-    assert semantic_label_match("Entreprise","Enterprise")
+    assert normalize_semantic_tokens("Entreprise") == {"company"}
+    assert semantic_label_match("Entreprise","Company")
     assert semantic_label_match("Réception de la demande","Enterprise Receives Request")
     assert semantic_label_match("Acceptation de la demande","Accept Request")
     assert semantic_label_match("Rejet de la demande","Reject Request")
     assert not semantic_label_match("Vérifier le montant","Archive customer file")
+    assert not semantic_label_match("Accept Request","Reject Request")
+    assert not semantic_label_match("Validate Request","Send Invoice")
 
 def test_multilingual_participant_activities_and_interaction_are_covered():
     w=workflow()
@@ -168,3 +171,28 @@ def test_multilingual_participant_activities_and_interaction_are_covered():
 def test_multilingual_matching_does_not_relax_real_timer_requirement():
     req=requirements(timers=[{"kind":"duration","value":"P1D","activity":"Vérification de la demande"}])
     assert "MISSING_TIMER" in codes(req,workflow())
+
+def test_complete_multilingual_coverage_uses_participant_lane_and_message_endpoints():
+    w=workflow()
+    w["participants"]=[{"id":"client","name":"Client","processRef":"pc","properties":{}},{"id":"company","name":"Company","processRef":"po","properties":{}}]
+    w["lanes"]=[{"id":"company_lane","name":"Company","processRef":"po","participantRef":"company","properties":{}}]
+    w["nodes"]=[
+        {**node("client_send","Client Sends Request","sendTask","client"),"processRef":"pc"},
+        {**node("company_receive","Company Receives Request","receiveTask","company"),"processRef":"po","laneRef":"company_lane"},
+        {**node("validate","Validate Request","serviceTask","company"),"processRef":"po","laneRef":"company_lane"},
+        {**node("accept","Accept Request","serviceTask","company"),"processRef":"po","laneRef":"company_lane"},
+        {**node("reject","Reject Request","serviceTask","company"),"processRef":"po","laneRef":"company_lane"},
+        {**node("client_receive","Client Receives Response","receiveTask","client"),"processRef":"pc"},
+    ]
+    w["messageFlows"]=[
+        {"id":"to_company","source":"client_send","target":"company_receive","properties":{}},
+        {"id":"to_client","source":"accept","target":"client_receive","properties":{}},
+    ]
+    req=requirements(
+        participants=[{"name":"Client"},{"name":"Entreprise"}],
+        lanes=[{"name":"Entreprise","participant":"Entreprise"}],
+        activities=[{"name":"Réception de la demande"},{"name":"Vérification de la demande"},{"name":"Acceptation de la demande"},{"name":"Rejet de la demande"}],
+        interactions=[{"source":"Client","target":"Entreprise"},{"source":"Entreprise","target":"Client"}],
+    )
+    missing={issue["code"] for issue in CoverageValidator().validate(req,w)}
+    assert not ({"MISSING_PARTICIPANT","MISSING_LANE","MISSING_ACTIVITY","MISSING_INTERACTION"} & missing)

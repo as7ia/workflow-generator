@@ -5,8 +5,8 @@ from collections.abc import Mapping
 
 _SEMANTIC_STOPWORDS={"le","la","les","un","une","de","du","des","au","aux","et","pour","sur","dans","par","the","to","of","and","for","service"}
 _SEMANTIC_ALIASES={
-    "entreprise":"enterprise","enterprise":"enterprise","company":"enterprise",
-    "client":"customer","customer":"customer",
+    "entreprise":"company","enterprise":"company","company":"company",
+    "client":"client","customer":"client",
     "demande":"request","request":"request","requests":"request",
     "reception":"receive","recevoir":"receive","recoit":"receive","recu":"receive",
     "receive":"receive","receives":"receive","received":"receive","receiving":"receive",
@@ -21,24 +21,25 @@ _SEMANTIC_ALIASES={
     "cloture":"close","cloturer":"close","close":"close","closed":"close","closing":"close",
 }
 
-def _semantic_tokens(text):
+def normalize_semantic_tokens(text: str) -> set[str]:
+    """Return the significant generic FR/EN concepts contained in a label."""
     normalized=unicodedata.normalize("NFKD",str(text or "")).encode("ascii","ignore").decode().lower()
-    result=[]
+    result=set()
     for raw in re.findall(r"[a-z0-9]+",normalized):
         if raw in _SEMANTIC_STOPWORDS:continue
         token=_SEMANTIC_ALIASES.get(raw,raw)
         if token not in _SEMANTIC_ALIASES.values() and len(token)>4 and token.endswith("s"):
             token=token[:-1]
-        result.append(_SEMANTIC_ALIASES.get(token,token))
+        result.add(_SEMANTIC_ALIASES.get(token,token))
     return result
 
 def normalize_semantic_label(text):
     """Return a stable lightweight FR/EN normalization for a semantic label."""
-    return " ".join(_semantic_tokens(text))
+    return " ".join(sorted(normalize_semantic_tokens(text)))
 
 def semantic_label_match(a,b):
     """Match labels when one side contains all significant concepts of the other."""
-    left=set(_semantic_tokens(a));right=set(_semantic_tokens(b))
+    left=normalize_semantic_tokens(str(a or ""));right=normalize_semantic_tokens(str(b or ""))
     return bool(left and right) and (left==right or left<right or right<left)
 
 class CoverageValidator:
@@ -65,9 +66,10 @@ class CoverageValidator:
             timer_requirements.append(req)
             if not self._matching_timers(req,timer_nodes):issues.append(self._missing("timers",req,self._rank(req,timer_nodes,self._timer_score)))
         timer_activities=[req.get("activity") for req in timer_requirements if req.get("activity")]
+        activity_nodes=[n for n in nodes if n.get("type") not in {"startEvent","endEvent"}]
         for req in self._valid(requirements,"activities",("name",)):
             if any(self._text_match(req["name"],name) for name in timer_activities):continue
-            if not any(self._name_match(req["name"],n) for n in nodes):issues.append(self._missing("activities",req,self._rank(req,nodes,self._name_score)))
+            if not any(self._name_match(req["name"],n) for n in activity_nodes):issues.append(self._missing("activities",req,self._rank(req,activity_nodes,self._name_score)))
         parallel_gateways=[n for n in nodes if n.get("type")=="parallelGateway" and len(outgoing.get(n.get("id"),[]))>=2]
         for req in self._requirements(requirements,"parallelisms"):
             branches=self._branch_names(req)
@@ -177,4 +179,4 @@ class CoverageValidator:
         return result
     @classmethod
     def _tokens(cls,*values):
-        return set(_semantic_tokens(" ".join(str(v or "") for v in values)))
+        return normalize_semantic_tokens(" ".join(str(v or "") for v in values))
