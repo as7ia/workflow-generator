@@ -112,3 +112,27 @@ def test_coverage_repair_rejects_candidate_with_more_structural_errors():
     diagnostic=report[0]["coverage_repair"]
     assert result==current and diagnostic["errors_after"]<diagnostic["errors_before"]
     assert diagnostic["structure_errors_after"]>diagnostic["structure_errors_before"] and diagnostic["accepted_candidate"] is False
+
+def test_coverage_repair_rejects_removed_referenced_lane_or_participant():
+    current=canonical_three_processes()
+    current["lanes"]=[{"id":"lane_1","name":"Operations","processRef":"p1","participantRef":"participant_1","properties":{}}]
+    current["nodes"][1]["laneRef"]="lane_1"
+    requirements=coverage_requirements();errors=CoverageValidator().validate(requirements,current)
+    for key,identifier in (("lanes","lane_1"),("participants","participant_1")):
+        candidate=copy.deepcopy(current)
+        candidate[key]=[item for item in candidate[key] if item["id"]!=identifier]
+        result,report=WorkflowRepairer(1).repair(current,errors,Queue(candidate),requirements=requirements,repair_kind="coverage",workflow_is_prepared=True)
+        assert result==current
+        assert report[0]["coverage_repair"]["accepted_candidate"] is False
+
+def test_coverage_repair_accepts_additive_timer_with_identical_structure():
+    current=canonical_three_processes();candidate=copy.deepcopy(current)
+    requirements={**coverage_requirements(),"activities":[],"timers":[{"kind":"duration","value":"P1D","activity":"Wait one day"}]}
+    candidate["nodes"].append({"id":"timer_required","type":"intermediateCatchEvent","name":"Wait one day","processRef":"p1","participantRef":"participant_1","laneRef":None,"actor":None,"properties":{"timer":{"kind":"duration","value":"P1D"}}})
+    next(flow for flow in candidate["flows"] if flow["id"]=="p1_f2")["target"]="timer_required"
+    candidate["flows"].append(
+        {"id":"p1_timer_out","source":"timer_required","target":"p1_e","processRef":"p1","condition":None,"isDefault":False,"properties":{}})
+    errors=CoverageValidator().validate(requirements,current)
+    result,report=WorkflowRepairer(1).repair(current,errors,Queue(candidate),requirements=requirements,repair_kind="coverage",workflow_is_prepared=True)
+    assert any(node["id"]=="timer_required" for node in result["nodes"])
+    assert report[0]["coverage_repair"]["accepted_candidate"] is True

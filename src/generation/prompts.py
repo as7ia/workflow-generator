@@ -81,6 +81,10 @@ def build_coverage_repair_prompt(workflow:dict[str,Any],errors:list[dict[str,Any
         if not isinstance(error,dict) or error.get("severity","error")!="error":continue
         blocking.append({key:error[key] for key in ("code","message","requirement") if key in error})
     return (
+        "Preserve all existing IDs unless absolutely necessary. Do not rename IDs.\n"
+        "Do not delete participants or lanes that are referenced by nodes.\n"
+        "Do not remove structural entities unrelated to the missing requirement. Apply the smallest possible patch and keep all existing valid references intact.\n"
+        "For MISSING_TIMER, add or correct only the required timer. For MISSING_ACTIVITY, add or rename the closest activity without deleting other elements. For MISSING_PARTICIPANT, add one only when no semantically equivalent participant exists.\n\n"
         "Corrige uniquement ces exigences manquantes dans le workflow existant. "
         "Ne régénère pas le workflow et préserve tous ses processus, participants, nœuds et flux existants.\n\n"
         f"Exigences sémantiques nécessaires:\n{json.dumps(requirements,ensure_ascii=False,separators=(',',':'),sort_keys=True)}\n\n"

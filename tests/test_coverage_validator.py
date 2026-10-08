@@ -1,4 +1,4 @@
-from src.workflow.coverage_validator import CoverageValidator
+from src.workflow.coverage_validator import CoverageValidator,normalize_semantic_label,semantic_label_match
 from src.workflow.semantic_requirements import normalize_semantic_requirements
 
 def node(i,name,t="serviceTask",participant=None,properties=None):
@@ -148,3 +148,23 @@ def test_malformed_requirements_become_ambiguities_not_blocking_errors():
     assert normalized["parallelisms"]==[] and normalized["decisions"]==[] and normalized["interactions"]==[] and normalized["timers"]==[]
     assert normalized["ambiguities"]
     assert not [issue for issue in CoverageValidator().validate(normalized,workflow()) if issue["severity"]=="error"]
+
+def test_multilingual_semantic_label_matching_is_controlled():
+    assert normalize_semantic_label("Réception de la demande") == "receive request"
+    assert semantic_label_match("Entreprise","Enterprise")
+    assert semantic_label_match("Réception de la demande","Enterprise Receives Request")
+    assert semantic_label_match("Acceptation de la demande","Accept Request")
+    assert semantic_label_match("Rejet de la demande","Reject Request")
+    assert not semantic_label_match("Vérifier le montant","Archive customer file")
+
+def test_multilingual_participant_activities_and_interaction_are_covered():
+    w=workflow()
+    w["participants"]=[{"id":"client","name":"Client","processRef":"pc","properties":{}},{"id":"enterprise","name":"Enterprise","processRef":"pe","properties":{}}]
+    w["nodes"]=[node("send","Send request","sendTask","client"),node("receive","Enterprise Receives Request","receiveTask","enterprise"),node("accept","Accept Request","serviceTask","enterprise"),node("reject","Reject Request","serviceTask","enterprise")]
+    w["messageFlows"]=[{"id":"message","source":"send","target":"receive","properties":{}}]
+    req=requirements(participants=[{"name":"Entreprise"}],activities=[{"name":"Réception de la demande"},{"name":"Acceptation de la demande"},{"name":"Rejet de la demande"}],interactions=[{"source":"Client","target":"Entreprise"}])
+    assert not CoverageValidator().validate(req,w)
+
+def test_multilingual_matching_does_not_relax_real_timer_requirement():
+    req=requirements(timers=[{"kind":"duration","value":"P1D","activity":"Vérification de la demande"}])
+    assert "MISSING_TIMER" in codes(req,workflow())

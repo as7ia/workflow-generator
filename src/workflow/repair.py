@@ -260,15 +260,32 @@ class WorkflowRepairer:
     @classmethod
     def _coverage_candidate_acceptable(cls,current,candidate,current_structural,candidate_structural,current_coverage,candidate_coverage):
         if cls.is_catastrophic_regression(current,candidate,candidate_structural):return False
-        for key in ("nodes","participants","processes"):
+        for key in ("nodes","participants","processes","lanes"):
             before=current.get(key,[]) if isinstance(current.get(key,[]),list) else []
             after=candidate.get(key,[]) if isinstance(candidate.get(key,[]),list) else []
             if before and not after:return False
             if len(after)<len(before):return False
+        if not cls._preserves_existing_ids(current,candidate):return False
         if cls._error_count(candidate_structural)>cls._error_count(current_structural):return False
+        protected_unknown={"UNKNOWN_NODE_PARTICIPANT","UNKNOWN_NODE_LANE","UNKNOWN_NODE_PROCESS","UNKNOWN_FLOW_PROCESS"}
+        for code in protected_unknown:
+            before=sum(x.get("code")==code for x in current_structural if x.get("severity","error")=="error")
+            after=sum(x.get("code")==code for x in candidate_structural if x.get("severity","error")=="error")
+            if after>before:return False
         before_unknown=sum(str(x.get("code","")).startswith("UNKNOWN_") for x in current_structural)
         after_unknown=sum(str(x.get("code","")).startswith("UNKNOWN_") for x in candidate_structural)
         return after_unknown<=before_unknown and cls._error_count(candidate_coverage)<cls._error_count(current_coverage)
+
+    @staticmethod
+    def _preserves_existing_ids(current,candidate):
+        """Coverage repair is additive: existing structural identities must survive."""
+        for key in ("processes","participants","lanes","nodes","flows","messageFlows"):
+            before=current.get(key,[]) if isinstance(current,Mapping) else []
+            after=candidate.get(key,[]) if isinstance(candidate,Mapping) else []
+            before_ids={item.get("id") for item in before if isinstance(item,Mapping) and item.get("id")}
+            after_ids={item.get("id") for item in after if isinstance(item,Mapping) and item.get("id")}
+            if not before_ids<=after_ids:return False
+        return True
 
     @classmethod
     def is_catastrophic_regression(cls,before,candidate,candidate_errors):

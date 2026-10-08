@@ -7,7 +7,7 @@ import inspect
 import json
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 try:
     from ..bpmn import BPMNGenerator, BPMNLayoutEngine
@@ -394,8 +394,8 @@ class WorkflowCompiler:
         except (TypeError, ValueError):
             supports_limit = False
         if supports_limit:
-            return generate_json(prompt, max_new_tokens=token_limit)
-        return generate_json(prompt)
+            return cast(dict[str, Any], generate_json(prompt, max_new_tokens=token_limit))
+        return cast(dict[str, Any], generate_json(prompt))
 
     @staticmethod
     def _workflow_counts(workflow: Mapping[str, Any]) -> dict[str, int]:

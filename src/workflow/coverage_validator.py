@@ -3,9 +3,47 @@ from __future__ import annotations
 import re,unicodedata
 from collections.abc import Mapping
 
+_SEMANTIC_STOPWORDS={"le","la","les","un","une","de","du","des","au","aux","et","pour","sur","dans","par","the","to","of","and","for","service"}
+_SEMANTIC_ALIASES={
+    "entreprise":"enterprise","enterprise":"enterprise","company":"enterprise",
+    "client":"customer","customer":"customer",
+    "demande":"request","request":"request","requests":"request",
+    "reception":"receive","recevoir":"receive","recoit":"receive","recu":"receive",
+    "receive":"receive","receives":"receive","received":"receive","receiving":"receive",
+    "verification":"verify","verifier":"verify","verify":"verify","verifies":"verify",
+    "verified":"verify","checking":"verify","check":"verify","checked":"verify",
+    "validate":"verify","validates":"verify","validated":"verify","validation":"verify",
+    "acceptation":"accept","accept":"accept","accepts":"accept","accepted":"accept",
+    "approval":"accept","approved":"accept","approve":"accept",
+    "rejet":"reject","rejeter":"reject","reject":"reject","rejects":"reject",
+    "rejected":"reject","refus":"reject","refusal":"reject","refuse":"reject",
+    "envoyer":"send","envoi":"send","send":"send","sends":"send","sent":"send",
+    "cloture":"close","cloturer":"close","close":"close","closed":"close","closing":"close",
+}
+
+def _semantic_tokens(text):
+    normalized=unicodedata.normalize("NFKD",str(text or "")).encode("ascii","ignore").decode().lower()
+    result=[]
+    for raw in re.findall(r"[a-z0-9]+",normalized):
+        if raw in _SEMANTIC_STOPWORDS:continue
+        token=_SEMANTIC_ALIASES.get(raw,raw)
+        if token not in _SEMANTIC_ALIASES.values() and len(token)>4 and token.endswith("s"):
+            token=token[:-1]
+        result.append(_SEMANTIC_ALIASES.get(token,token))
+    return result
+
+def normalize_semantic_label(text):
+    """Return a stable lightweight FR/EN normalization for a semantic label."""
+    return " ".join(_semantic_tokens(text))
+
+def semantic_label_match(a,b):
+    """Match labels when one side contains all significant concepts of the other."""
+    left=set(_semantic_tokens(a));right=set(_semantic_tokens(b))
+    return bool(left and right) and (left==right or left<right or right<left)
+
 class CoverageValidator:
     CODES={"participants":"MISSING_PARTICIPANT","lanes":"MISSING_LANE","timers":"MISSING_TIMER","parallelisms":"MISSING_PARALLELISM","decisions":"MISSING_DECISION","interactions":"MISSING_INTERACTION","activities":"MISSING_ACTIVITY"}
-    _STOPWORDS={"le","la","les","un","une","de","du","des","au","aux","et","pour","sur","dans","par","the","to","of","and","for","service"}
+    _STOPWORDS=_SEMANTIC_STOPWORDS
 
     def validate(self,requirements,workflow):
         if not isinstance(requirements,Mapping) or not isinstance(workflow,Mapping):return []
@@ -64,8 +102,7 @@ class CoverageValidator:
     def _missing(self,kind,req,related=()):return {"code":self.CODES[kind],"message":f"Missing semantic coverage for {kind}.","severity":"error","requirement":req,"related_node_ids":list(dict.fromkeys(x for x in related if x is not None))}
     def _name_match(self,expected,item):return self._text_match(expected,item.get("name")) if isinstance(item,Mapping) else self._text_match(expected,item)
     def _text_match(self,expected,actual):
-        wanted=self._tokens(expected);found=self._tokens(actual)
-        return bool(wanted and found) and (wanted==found or wanted<=found)
+        return semantic_label_match(expected,actual)
     def _similarity(self,a,b):
         left=self._tokens(a);right=self._tokens(b)
         return len(left&right)/len(left|right) if left and right else 0.0
@@ -140,10 +177,4 @@ class CoverageValidator:
         return result
     @classmethod
     def _tokens(cls,*values):
-        text=unicodedata.normalize("NFKD"," ".join(str(v or "") for v in values)).encode("ascii","ignore").decode().lower();result=[]
-        for token in re.findall(r"[a-z0-9]+",text):
-            if token in cls._STOPWORDS:continue
-            if len(token)>4 and token.endswith("s"):token=token[:-1]
-            if len(token)>4 and token.endswith("er"):token=token[:-1]
-            result.append(token)
-        return set(result)
+        return set(_semantic_tokens(" ".join(str(v or "") for v in values)))
