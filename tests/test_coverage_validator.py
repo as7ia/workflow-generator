@@ -196,3 +196,24 @@ def test_complete_multilingual_coverage_uses_participant_lane_and_message_endpoi
     )
     missing={issue["code"] for issue in CoverageValidator().validate(req,w)}
     assert not ({"MISSING_PARTICIPANT","MISSING_LANE","MISSING_ACTIVITY","MISSING_INTERACTION"} & missing)
+
+def test_semantically_labeled_terminal_events_cover_activities():
+    w=workflow()
+    w["nodes"].extend([
+        node("approved_end","Approve Request","endEvent","pa"),
+        node("rejected_end","Reject Request","endEvent","pa"),
+    ])
+    req=requirements(activities=[{"name":"Approval of request"},{"name":"Rejection of request"}])
+    assert "MISSING_ACTIVITY" not in codes(req,w)
+
+def test_terminal_event_requires_a_semantically_equivalent_label():
+    w=workflow();w["nodes"].append(node("rejected_end","Reject Request","endEvent","pa"))
+    assert "MISSING_ACTIVITY" in codes(requirements(activities=[{"name":"Approve Request"}]),w)
+
+def test_synthetic_terminal_label_does_not_cover_unrelated_activity():
+    w=workflow();w["nodes"].append(node("synthetic_end","end_process_request","endEvent","pa"))
+    assert "MISSING_ACTIVITY" in codes(requirements(activities=[{"name":"Validate Request"}]),w)
+
+def test_normal_task_still_covers_an_activity():
+    w=workflow();w["nodes"].append(node("validate_task","Validate Request","serviceTask","pa"))
+    assert "MISSING_ACTIVITY" not in codes(requirements(activities=[{"name":"Verification de la demande"}]),w)

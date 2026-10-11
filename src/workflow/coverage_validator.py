@@ -15,7 +15,7 @@ _SEMANTIC_ALIASES={
     "validate":"verify","validates":"verify","validated":"verify","validation":"verify",
     "acceptation":"accept","accept":"accept","accepts":"accept","accepted":"accept",
     "approval":"accept","approved":"accept","approve":"accept",
-    "rejet":"reject","rejeter":"reject","reject":"reject","rejects":"reject",
+    "rejet":"reject","rejeter":"reject","reject":"reject","rejects":"reject","rejection":"reject",
     "rejected":"reject","refus":"reject","refusal":"reject","refuse":"reject",
     "envoyer":"send","envoi":"send","send":"send","sends":"send","sent":"send",
     "cloture":"close","cloturer":"close","close":"close","closed":"close","closing":"close",
@@ -66,7 +66,7 @@ class CoverageValidator:
             timer_requirements.append(req)
             if not self._matching_timers(req,timer_nodes):issues.append(self._missing("timers",req,self._rank(req,timer_nodes,self._timer_score)))
         timer_activities=[req.get("activity") for req in timer_requirements if req.get("activity")]
-        activity_nodes=[n for n in nodes if n.get("type") not in {"startEvent","endEvent"}]
+        activity_nodes=[n for n in nodes if n.get("type")!="startEvent"]
         for req in self._valid(requirements,"activities",("name",)):
             if any(self._text_match(req["name"],name) for name in timer_activities):continue
             if not any(self._name_match(req["name"],n) for n in activity_nodes):issues.append(self._missing("activities",req,self._rank(req,activity_nodes,self._name_score)))
