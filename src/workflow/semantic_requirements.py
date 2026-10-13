@@ -64,7 +64,14 @@ def _normalize_semantic_requirements(raw,description=None):
         else:ambiguities.append({"message":"Parallelism requires at least two branches.","requirement":{"branches":branches}})
     decisions=[]
     for item in collections["decisions"]:
-        outcomes=_dedupe([str(value).strip() for value in item.get("outcomes",[]) if str(value).strip()],_norm) if isinstance(item.get("outcomes"),list) else []
+        outcomes=[]
+        if isinstance(item.get("outcomes"),list):
+            for value in item["outcomes"]:
+                if isinstance(value,Mapping):
+                    outcome=copy.deepcopy(dict(value))
+                    if _norm(outcome.get("name")):outcomes.append(outcome)
+                elif str(value).strip():outcomes.append(str(value).strip())
+            outcomes=_dedupe(outcomes,lambda value:_norm(value.get("name")) if isinstance(value,Mapping) else _norm(value))
         if not _norm(item.get("name")) or len(outcomes)<2:
             ambiguities.append({"message":"Decision requires a name and at least two outcomes.","requirement":item});continue
         decisions.append({"name":item["name"],"outcomes":outcomes})
@@ -74,7 +81,7 @@ def _normalize_semantic_requirements(raw,description=None):
                         and (not isinstance(description,str) or not _activity_is_passive_only(description,x.get("name")))],
                        lambda x:_norm(x.get("name")))
     result={"participants":participants,"lanes":lanes,"timers":_dedupe(timers,lambda x:(x.get("kind"),x.get("value"),_norm(x.get("activity")))),
-            "parallelisms":parallelisms,"decisions":_dedupe(decisions,lambda x:(_norm(x["name"]),tuple(_norm(v) for v in x["outcomes"]))),
+            "parallelisms":parallelisms,"decisions":_dedupe(decisions,lambda x:(_norm(x["name"]),tuple(_norm(v.get("name")) if isinstance(v,Mapping) else _norm(v) for v in x["outcomes"]))),
             "interactions":interactions,"activities":activities,"ambiguities":_dedupe(ambiguities,lambda x:_norm(x.get("message") or x.get("name") or x.get("requirement")))}
     return SemanticRequirements(**result).to_dict(),issues
 def ground_semantic_requirements(raw,description):
@@ -192,7 +199,7 @@ def _split_action_chunks(tokens,actors):
 def _requirement_marker(kind,item):
     if kind=="interactions":return (_norm(item.get("source")),_norm(item.get("target")))
     if kind=="timers":return (item.get("kind"),item.get("value") or item.get("duration"))
-    if kind=="decisions":return (_norm(item.get("name") or item.get("condition")),tuple(_norm(value) for value in item.get("outcomes",[]) if value))
+    if kind=="decisions":return (_norm(item.get("name") or item.get("condition")),tuple(_norm(value.get("name")) if isinstance(value,Mapping) else _norm(value) for value in item.get("outcomes",[]) if value))
     return _norm(item.get("name"))
 def _explicit_duration(description):
     text=unicodedata.normalize("NFKD",description).encode("ascii","ignore").decode().lower()

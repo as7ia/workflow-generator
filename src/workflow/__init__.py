@@ -7,6 +7,7 @@ from .repair import WorkflowRepairer
 from .semantic_validator import SemanticValidator
 from .semantic_requirements import SemanticRequirements, ground_semantic_requirements, normalize_semantic_requirements
 from .coverage_validator import CoverageValidator, semantic_label_match
+from .canonicalization import GroundedWorkflowCanonicalizer
 
 __all__ = [
     "SemanticValidator",
@@ -19,4 +20,5 @@ __all__ = [
     "ground_semantic_requirements",
     "CoverageValidator",
     "semantic_label_match",
+    "GroundedWorkflowCanonicalizer",
 ]

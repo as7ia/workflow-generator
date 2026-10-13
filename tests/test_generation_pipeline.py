@@ -180,9 +180,11 @@ def test_rejected_coverage_candidate_does_not_replace_structural_success():
     result=c.compile("Client, Entreprise and Banque require a missing required step.")
     assert result["error"]["stage"]=="coverage_repair"
     assert len(result["normalized_workflow"]["participants"])==3
-    assert len(result["normalized_workflow"]["nodes"])==12
+    # Grounded canonicalization now creates the missing participants before
+    # coverage repair; an equal-score Qwen candidate no longer replaces it.
+    assert len(result["normalized_workflow"]["nodes"])==7
     assert result["pipeline_debug"]["before_coverage_validation"]["participants"]==3
-    assert result["pipeline_debug"]["before_coverage_validation"]["nodes"]==12
-    assert result["pipeline_debug"]["coverage_candidate"]["nodes"]==0
-    assert result["pipeline_debug"]["final_current_workflow"]["nodes"]==12
+    assert result["pipeline_debug"]["before_coverage_validation"]["nodes"]==7
+    assert result["pipeline_debug"]["coverage_candidate"]["nodes"]==12
+    assert result["pipeline_debug"]["final_current_workflow"]["nodes"]==7
     assert result["repair_report"][-1]["coverage_repair"]["accepted_candidate"] is False

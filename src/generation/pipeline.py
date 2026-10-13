@@ -21,6 +21,7 @@ try:
         ground_semantic_requirements,
         SemanticValidator,
         semantic_label_match,
+        GroundedWorkflowCanonicalizer,
     )
 except ImportError:  # pragma: no cover - supports PYTHONPATH=src notebooks.
     from bpmn import BPMNGenerator, BPMNLayoutEngine
@@ -34,6 +35,7 @@ except ImportError:  # pragma: no cover - supports PYTHONPATH=src notebooks.
         ground_semantic_requirements,
         SemanticValidator,
         semantic_label_match,
+        GroundedWorkflowCanonicalizer,
     )
 
 from .prompts import build_generation_prompt, build_semantic_requirements_prompt
@@ -154,7 +156,11 @@ class WorkflowCompiler:
             result["pipeline_debug"]["after_normalization"] = self._workflow_counts(normalized)
             if not self.is_meaningful_workflow(normalized):
                 return self._fail(result,"generation","La génération n'a produit aucun workflow exploitable.")
-            prepared = preparer.prepare_normalized_and_validate(normalized,normalization_report)
+            result["pipeline_debug"]["pre_canonical_workflow"] = self._workflow_counts(normalized)
+            canonical,canonicalization_report=GroundedWorkflowCanonicalizer.canonicalize(normalized,requirements)
+            result["pipeline_debug"]["post_canonical_workflow"] = self._workflow_counts(canonical)
+            result["pipeline_debug"]["canonicalization_report"] = canonicalization_report
+            prepared = preparer.prepare_normalized_and_validate(canonical,normalization_report)
             current_workflow = copy.deepcopy(prepared["workflow"])
             self._assert_initial_prepare_preserved(normalized,current_workflow)
             preparation_reports=(prepared["normalization_report"],prepared["safe_repair_report"])
@@ -378,6 +384,9 @@ class WorkflowCompiler:
                 "semantic_requirements_raw": None,
                 "semantic_requirements_grounded": None,
                 "requirement_grounding_report": None,
+                "pre_canonical_workflow": None,
+                "post_canonical_workflow": None,
+                "canonicalization_report": None,
             },
         }
 
