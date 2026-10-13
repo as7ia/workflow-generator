@@ -64,7 +64,10 @@ def normalize_semantic_requirements(raw,description=None):
             ambiguities.append({"message":"Decision requires a name and at least two outcomes.","requirement":item});continue
         decisions.append({"name":item["name"],"outcomes":outcomes})
     timer_activities={_norm(x.get("activity")) for x in timers if x.get("activity")}
-    activities=_dedupe([{"name":x.get("name","")} for x in collections["activities"] if _norm(x.get("name")) and _norm(x.get("name")) not in timer_activities],lambda x:_norm(x.get("name")))
+    activities=_dedupe([{"name":x.get("name","")} for x in collections["activities"]
+                        if _norm(x.get("name")) and _norm(x.get("name")) not in timer_activities
+                        and (not isinstance(description,str) or not _activity_is_passive_only(description,x.get("name")))],
+                       lambda x:_norm(x.get("name")))
     result={"participants":participants,"lanes":lanes,"timers":_dedupe(timers,lambda x:(x.get("kind"),x.get("value"),_norm(x.get("activity")))),
             "parallelisms":parallelisms,"decisions":_dedupe(decisions,lambda x:(_norm(x["name"]),tuple(_norm(v) for v in x["outcomes"]))),
             "interactions":interactions,"activities":activities,"ambiguities":_dedupe(ambiguities,lambda x:_norm(x.get("message") or x.get("name") or x.get("requirement")))}
@@ -118,6 +121,14 @@ def _has_temporal_evidence(description):
     if re.search(r"\b(?:every|each|tous?\s+les?|chaque|until|jusqu(?:a|')|deadline|echeance)\b",text):return True
     if re.search(r"\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}\s+(?:january|february|march|april|may|june|july|august|september|october|november|december|janvier|fevrier|mars|avril|mai|juin|juillet|aout|septembre|octobre|novembre|decembre)\b",text):return True
     return bool(re.search(r"\bP(?=\d|T)\d*(?:Y|M|W|D)(?:T\d+(?:H|M|S))?\b",description,re.I))
+def _activity_is_passive_only(description,activity):
+    from .coverage_validator import semantic_label_match
+    passive=re.compile(r"\b(?:is|are|was|were|est|sont|ete)\s+[a-z]+(?:ed|en|e|ee|es|ees)\b")
+    matching=[]
+    for sentence in re.split(r"(?<=[.!?;])\s+|[\r\n]+",description):
+        normalized=" ".join(_evidence_tokens(sentence))
+        if semantic_label_match(activity,normalized):matching.append(bool(passive.search(normalized)))
+    return bool(matching) and all(matching)
 def _valid_timer_value(kind,value):
     text=str(value or "").strip()
     if kind=="duration":return bool(re.fullmatch(r"P(?=.+)(?:\d+(?:\.\d+)?[YMWD])*(?:T(?:\d+(?:\.\d+)?[HMS])+)?",text))

@@ -18,6 +18,8 @@ try:
         WorkflowRepairer,
         CoverageValidator,
         normalize_semantic_requirements,
+        SemanticValidator,
+        semantic_label_match,
     )
 except ImportError:  # pragma: no cover - supports PYTHONPATH=src notebooks.
     from bpmn import BPMNGenerator, BPMNLayoutEngine
@@ -28,6 +30,8 @@ except ImportError:  # pragma: no cover - supports PYTHONPATH=src notebooks.
         WorkflowRepairer,
         CoverageValidator,
         normalize_semantic_requirements,
+        SemanticValidator,
+        semantic_label_match,
     )
 
 from .prompts import build_generation_prompt, build_semantic_requirements_prompt
@@ -148,6 +152,10 @@ class WorkflowCompiler:
             prepared = preparer.prepare_normalized_and_validate(normalized,normalization_report)
             current_workflow = copy.deepcopy(prepared["workflow"])
             self._assert_initial_prepare_preserved(normalized,current_workflow)
+            preparation_reports=(prepared["normalization_report"],prepared["safe_repair_report"])
+            current_workflow = self._align_semantic_roles_transactionally(current_workflow,requirements)
+            prepared = preparer.validate_prepared(current_workflow)
+            prepared["normalization_report"],prepared["safe_repair_report"]=preparation_reports
             if not self.is_meaningful_workflow(current_workflow):
                 return self._fail(result,"generation","La génération n'a produit aucun workflow exploitable.")
             result["normalized_workflow"] = copy.deepcopy(current_workflow)
@@ -396,6 +404,85 @@ class WorkflowCompiler:
         if supports_limit:
             return cast(dict[str, Any], generate_json(prompt, max_new_tokens=token_limit))
         return cast(dict[str, Any], generate_json(prompt))
+
+    @classmethod
+    def _align_semantic_roles_transactionally(cls,workflow: dict[str,Any],requirements: Mapping[str,Any])->dict[str,Any]:
+        """Accept a node-local role alignment only when collaboration and validation are preserved."""
+        original=copy.deepcopy(workflow)
+        candidate=cls._build_semantic_role_candidate(original,requirements)
+        return cls._accept_semantic_alignment_candidate(original,candidate)
+
+    @classmethod
+    def _accept_semantic_alignment_candidate(cls,original: dict[str,Any],candidate: dict[str,Any])->dict[str,Any]:
+        if not cls._semantic_alignment_preserves_structure(original,candidate):return copy.deepcopy(original)
+        before=cls._blocking_error_markers(SemanticValidator().validate(original))
+        after=cls._blocking_error_markers(SemanticValidator().validate(candidate))
+        return copy.deepcopy(candidate if after<=before else original)
+
+    @classmethod
+    def _build_semantic_role_candidate(cls,workflow: dict[str,Any],requirements: Mapping[str,Any])->dict[str,Any]:
+        candidate=copy.deepcopy(workflow)
+        nodes=candidate.get("nodes",[]);flows=candidate.get("flows",[]);messages=candidate.get("messageFlows",[])
+        activities=requirements.get("activities",[]) if isinstance(requirements,Mapping) else []
+        if not all(isinstance(value,list) for value in (nodes,flows,messages,activities)):return candidate
+        message_sources={item.get("source") for item in messages if isinstance(item,Mapping)}
+        message_targets={item.get("target") for item in messages if isinstance(item,Mapping)}
+        used_nodes={item.get("id") for item in nodes if isinstance(item,Mapping)}
+        used_flows={item.get("id") for item in flows if isinstance(item,Mapping)}
+        task_types={"userTask","serviceTask","manualTask","scriptTask","businessRuleTask","sendTask","receiveTask","subProcess"}
+        for requirement in activities:
+            name=requirement.get("name") if isinstance(requirement,Mapping) else None
+            if not isinstance(name,str):continue
+            matches=[node for node in nodes if isinstance(node,dict) and semantic_label_match(name,node.get("name"))]
+            if any(node.get("type") in task_types for node in matches):continue
+            events=[node for node in matches if node.get("type") in {"startEvent","endEvent"}]
+            if len(events)!=1:continue
+            node=events[0];node_id=node.get("id");event_type=node.get("type")
+            node["type"]="sendTask" if node_id in message_sources else "receiveTask" if node_id in message_targets else "serviceTask"
+            base=f"{'start' if event_type=='startEvent' else 'end'}_{node.get('processRef') or 'process'}"
+            event_id=cls._unique_semantic_id(base,used_nodes);used_nodes.add(event_id)
+            nodes.append({"id":event_id,"type":event_type,"name":"Start" if event_type=="startEvent" else "End",
+                          "processRef":node.get("processRef"),"participantRef":node.get("participantRef"),
+                          "laneRef":node.get("laneRef"),"actor":None,"properties":{"synthetic":True}})
+            source,target=(event_id,node_id) if event_type=="startEvent" else (node_id,event_id)
+            flow_id=cls._unique_semantic_id(f"flow_{source}_{target}",used_flows);used_flows.add(flow_id)
+            flows.append({"id":flow_id,"source":source,"target":target,"processRef":node.get("processRef"),
+                          "condition":None,"isDefault":False,"properties":{"synthetic":True}})
+        return candidate
+
+    @staticmethod
+    def _semantic_alignment_preserves_structure(before: Mapping[str,Any],after: Mapping[str,Any])->bool:
+        def by_id(workflow,key):
+            value=workflow.get(key,[]) if isinstance(workflow,Mapping) else []
+            return {item.get("id"):item for item in value if isinstance(item,Mapping) and item.get("id")}
+        for key in ("processes","participants","lanes"):
+            left,right=by_id(before,key),by_id(after,key)
+            if set(left)!=set(right):return False
+        for identifier,item in by_id(before,"participants").items():
+            if by_id(after,"participants")[identifier].get("processRef")!=item.get("processRef"):return False
+        for identifier,item in by_id(before,"lanes").items():
+            other=by_id(after,"lanes")[identifier]
+            if (other.get("processRef"),other.get("participantRef"))!=(item.get("processRef"),item.get("participantRef")):return False
+        for identifier,item in by_id(before,"nodes").items():
+            other=by_id(after,"nodes").get(identifier)
+            if other is None:return False
+            if tuple(other.get(key) for key in ("processRef","participantRef","laneRef"))!=tuple(item.get(key) for key in ("processRef","participantRef","laneRef")):return False
+        for identifier,item in by_id(before,"flows").items():
+            other=by_id(after,"flows").get(identifier)
+            if other is None or other.get("processRef")!=item.get("processRef"):return False
+        return by_id(before,"messageFlows")==by_id(after,"messageFlows")
+
+    @staticmethod
+    def _blocking_error_markers(errors: list[dict[str,Any]])->set[tuple[Any,...]]:
+        return {(error.get("code"),error.get("process_id"),error.get("participant_id"),error.get("lane_id"),
+                 error.get("node_id"),error.get("flow_id"),error.get("message"))
+                for error in errors if error.get("severity","error")=="error"}
+
+    @staticmethod
+    def _unique_semantic_id(base: str,used: set[Any])->str:
+        candidate=base;suffix=2
+        while candidate in used:candidate=f"{base}_{suffix}";suffix+=1
+        return candidate
 
     @staticmethod
     def _workflow_counts(workflow: Mapping[str, Any]) -> dict[str, int]:

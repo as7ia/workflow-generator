@@ -10,6 +10,7 @@ def build_semantic_requirements_prompt(description:str)->str:
         "Participants are external actors/organizations. Lanes are internal roles and require name plus participant.\n"
         "Interactions use participant names; preserve optional sourceLane/targetLane. One parallelism contains a branches array.\n"
         "A decision requires a genuine conditional choice and at least two outcomes; actions or states are not decisions.\n"
+        "Keep every explicit actor action as an activity, including the first and last action. Distinguish it from a passive final state.\n"
         "Timers use kind, value and optional activity. Do not duplicate a timer activity in activities. Deduplicate all requirements.\n"
         "Extract only facts explicitly supported by the description. Never infer a return message, acknowledgement, notification, participant, activity, timer or delay.\n"
         "An accepted, rejected, approved or completed state is not an interaction unless the text explicitly communicates it to another participant.\n"
@@ -33,6 +34,9 @@ _V2_RULES = """Contrat obligatoire :
 - Un timer est représenté par intermediateCatchEvent avec properties.timer; timerEvent est interdit.
 - Les sorties d'une parallelGateway ne portent aucune condition.
 - Ne produis aucune coordonnée, waypoint ou XML BPMN.
+- Le type d'un node vient de son rôle sémantique, jamais de sa position dans la séquence.
+- Une action explicite d'un acteur est une tâche, même en première ou dernière position.
+- N'utilise pas startEvent ou endEvent pour remplacer cette activité: conserve un événement structurel séparé.
 
 IMPORTANT BPMN COLLABORATION RULES:
 1. Each participant/pool MUST reference its own process.
