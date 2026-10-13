@@ -75,3 +75,57 @@ def test_decision_outcomes_remain_structured_objects():
     assert not issues
     assert normalized["decisions"][0]["outcomes"] == [{"name": "Yes", "sourceLane": "Review"}, {"name": "No"}]
     assert all(isinstance(item, dict) for item in normalized["decisions"][0]["outcomes"])
+
+
+def test_translated_department_participants_are_resolved_without_duplicates():
+    value=workflow()
+    value["processes"] += [
+        {"id":"process_sales","name":"Sales process","description":"","executable":False,"properties":{}},
+        {"id":"process_finance","name":"Finance process","description":"","executable":False,"properties":{}},
+    ]
+    value["participants"] += [
+        {"id":"participant_sales","name":"Sales Department","processRef":"process_sales","properties":{}},
+        {"id":"participant_finance","name":"Financial Department","processRef":"process_finance","properties":{}},
+    ]
+    fixed,report=GroundedWorkflowCanonicalizer.canonicalize(value,requirements(
+        participants=[{"name":"A"},{"name":"Service commercial"},{"name":"Service financier"}]))
+    assert len(fixed["participants"])==3
+    assert len({p["processRef"] for p in fixed["participants"]})==3
+    assert {p["name"] for p in fixed["participants"]}=={"A","Service commercial","Service financier"}
+    assert {item["matched_existing_id"] for item in report["participant_matches"]}=={
+        "participant_a","participant_sales","participant_finance"}
+
+
+def test_new_interaction_nodes_are_inserted_in_local_sequences():
+    value=workflow()
+    value["nodes"].insert(1,{"id":"a_task","type":"serviceTask","name":"Work","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}})
+    value["flows"]=[
+        {"id":"a_1","source":"a_start","target":"a_task","processRef":"process_a","condition":None,"isDefault":False,"properties":{}},
+        {"id":"a_2","source":"a_task","target":"a_end","processRef":"process_a","condition":None,"isDefault":False,"properties":{}},
+    ]
+    fixed,report=GroundedWorkflowCanonicalizer.canonicalize(value,requirements(
+        participants=[{"name":"A"},{"name":"B"}],interactions=[{"source":"A","target":"B"}]))
+    by_id={node["id"]:node for node in fixed["nodes"]};message=fixed["messageFlows"][0]
+    send=message["source"];receive=message["target"]
+    edges={(flow["source"],flow["target"]) for flow in fixed["flows"]}
+    assert ("a_task",send) in edges and (send,"a_end") in edges
+    b_start=next(n["id"] for n in fixed["nodes"] if n["processRef"]==by_id[receive]["processRef"] and n["type"]=="startEvent")
+    b_end=next(n["id"] for n in fixed["nodes"] if n["processRef"]==by_id[receive]["processRef"] and n["type"]=="endEvent")
+    assert (b_start,receive) in edges and (receive,b_end) in edges
+    assert {item["id"] for item in report["nodes_inserted"]}=={send,receive}
+    forbidden={"ISOLATED_TASK","MISSING_INCOMING_FLOW","MISSING_OUTGOING_FLOW","UNREACHABLE_NODE"}
+    assert forbidden.isdisjoint(issue["code"] for issue in SemanticValidator().validate(fixed))
+
+
+def test_semantically_equivalent_receive_node_is_reused():
+    value=workflow()
+    value["nodes"].insert(1,{"id":"received","type":"serviceTask","name":"Order Received","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}})
+    value["flows"]=[
+        {"id":"a_1","source":"a_start","target":"received","processRef":"process_a","condition":None,"isDefault":False,"properties":{}},
+        {"id":"a_2","source":"received","target":"a_end","processRef":"process_a","condition":None,"isDefault":False,"properties":{}},
+    ]
+    fixed,report=GroundedWorkflowCanonicalizer.canonicalize(value,requirements(
+        participants=[{"name":"A"},{"name":"B"}],interactions=[{"source":"B","target":"A"}]))
+    assert fixed["messageFlows"][0]["target"]=="received"
+    assert len([n for n in fixed["nodes"] if n["processRef"]=="process_a" and n["type"]=="receiveTask"])==0
+    assert {item["id"] for item in report["nodes_reused_for_interactions"]}=={"received"}

@@ -7,7 +7,7 @@ import unicodedata
 from collections.abc import Mapping
 from typing import Any
 
-from .coverage_validator import semantic_label_match
+from .coverage_validator import normalize_semantic_tokens, semantic_label_match
 
 
 class GroundedWorkflowCanonicalizer:
@@ -22,9 +22,11 @@ class GroundedWorkflowCanonicalizer:
             "participants_added": [], "processes_added": [],
             "timer_nodes_corrected": [], "message_flows_reclassified": [],
             "interaction_endpoints_added": [], "decision_outcomes_normalized": [],
+            "participant_matches": [], "participants_created": [], "lanes_reused": [],
+            "nodes_reused_for_interactions": [], "nodes_inserted": [], "flows_rewired": [],
         }
         cls._ensure_participant_processes(value, requirements, report)
-        cls._ensure_required_lanes(value, requirements)
+        cls._ensure_required_lanes(value, requirements, report)
         cls._normalize_timer_nodes(value, requirements, report)
         cls._reclassify_local_messages(value, requirements, report)
         cls._ensure_interactions(value, requirements, report)
@@ -50,8 +52,14 @@ class GroundedWorkflowCanonicalizer:
             name = requirement.get("name") if isinstance(requirement, Mapping) else None
             if not isinstance(name, str) or not name.strip():
                 continue
-            matches = [p for p in participants if isinstance(p, dict) and semantic_label_match(name, p.get("name"))]
-            if matches:
+            participant = cls.resolve_participant(name, participants)
+            if participant is not None:
+                previous_name = participant.get("name")
+                participant["name"] = name
+                report["participant_matches"].append({
+                    "requirement": name, "matched_existing_id": participant.get("id"),
+                    "previous_name": previous_name, "canonical_name": name,
+                })
                 continue
             participant_id = cls._unique_id(f"participant_{cls._slug(name)}", used)
             process_matches = [p for p in processes if isinstance(p, Mapping) and p.get("id") not in owned_processes
@@ -66,6 +74,7 @@ class GroundedWorkflowCanonicalizer:
             used.add(participant_id); owned_processes.add(process_id)
             participants.append({"id": participant_id, "name": name, "processRef": process_id, "properties": {}})
             report["participants_added"].append({"id": participant_id, "name": name})
+            report["participants_created"].append({"id": participant_id, "name": name})
 
         owners: dict[str, list[dict[str, Any]]] = {}
         for participant in participants:
@@ -117,7 +126,7 @@ class GroundedWorkflowCanonicalizer:
         cls._complete_participant_processes(workflow, used)
 
     @classmethod
-    def _ensure_required_lanes(cls, workflow, requirements):
+    def _ensure_required_lanes(cls, workflow, requirements, report):
         required = requirements.get("lanes", []) if isinstance(requirements, Mapping) else []
         lanes = workflow.get("lanes", []); participants = workflow.get("participants", [])
         if not isinstance(required, list) or not isinstance(lanes, list): return
@@ -128,8 +137,13 @@ class GroundedWorkflowCanonicalizer:
             matches = [p for p in participants if isinstance(p, Mapping) and semantic_label_match(owner, p.get("name"))]
             if not isinstance(name, str) or len(matches) != 1: continue
             participant = matches[0]
-            if any(isinstance(lane, Mapping) and lane.get("participantRef") == participant.get("id")
-                   and semantic_label_match(name, lane.get("name")) for lane in lanes): continue
+            existing = next((lane for lane in lanes if isinstance(lane, dict)
+                             and lane.get("participantRef") == participant.get("id")
+                             and semantic_label_match(name, lane.get("name"))), None)
+            if existing is not None:
+                previous_name=existing.get("name");existing["name"]=name
+                report["lanes_reused"].append({"id":existing.get("id"),"previous_name":previous_name,"canonical_name":name})
+                continue
             lane_id = cls._unique_id(f"lane_{cls._slug(name)}", used); used.add(lane_id)
             lanes.append({"id": lane_id, "name": name, "processRef": participant.get("processRef"),
                           "participantRef": participant.get("id"), "properties": {}})
@@ -213,48 +227,70 @@ class GroundedWorkflowCanonicalizer:
         used = cls._all_ids(workflow)
         for interaction in interactions:
             if not isinstance(interaction, Mapping): continue
-            sources = [p for p in participants if semantic_label_match(interaction.get("source"), p.get("name"))]
-            targets = [p for p in participants if semantic_label_match(interaction.get("target"), p.get("name"))]
-            if len(sources) != 1 or len(targets) != 1 or sources[0].get("processRef") == targets[0].get("processRef"): continue
-            source_node = cls._message_endpoint(nodes, messages, sources[0], "source", "sendTask")
-            target_node = cls._message_endpoint(nodes, messages, targets[0], "target", "receiveTask")
+            source_participant=cls.resolve_participant(interaction.get("source"),participants)
+            target_participant=cls.resolve_participant(interaction.get("target"),participants)
+            if source_participant is None or target_participant is None or source_participant.get("processRef") == target_participant.get("processRef"): continue
+            source_node = cls._message_endpoint(nodes, messages, source_participant, "source", "sendTask", target_participant.get("name"))
+            target_node = cls._message_endpoint(nodes, messages, target_participant, "target", "receiveTask", source_participant.get("name"))
             if source_node is None:
-                source_node = cls._insert_endpoint(workflow, sources[0], "sendTask", f"Send to {targets[0].get('name')}", used)
-                report["interaction_endpoints_added"].append({"id": source_node["id"], "role": "source"})
+                source_node = cls.insert_node_into_process_sequence(
+                    workflow, source_participant, "sendTask", f"Send to {target_participant.get('name')}", used, "before_end", report)
+                if source_node is not None: report["interaction_endpoints_added"].append({"id": source_node["id"], "role": "source"})
+            else: report["nodes_reused_for_interactions"].append({"id":source_node.get("id"),"role":"source"})
             if target_node is None:
-                target_node = cls._insert_endpoint(workflow, targets[0], "receiveTask", f"Receive from {sources[0].get('name')}", used)
-                report["interaction_endpoints_added"].append({"id": target_node["id"], "role": "target"})
+                target_node = cls.insert_node_into_process_sequence(
+                    workflow, target_participant, "receiveTask", f"Receive from {source_participant.get('name')}", used, "after_start", report)
+                if target_node is not None: report["interaction_endpoints_added"].append({"id": target_node["id"], "role": "target"})
+            else: report["nodes_reused_for_interactions"].append({"id":target_node.get("id"),"role":"target"})
+            if source_node is None or target_node is None: continue
             pair = (source_node["id"], target_node["id"])
             if not any(isinstance(m, Mapping) and (m.get("source"), m.get("target")) == pair for m in messages):
                 message_id = cls._unique_id("message_flow", used); used.add(message_id)
                 messages.append({"id": message_id, "source": pair[0], "target": pair[1], "properties": {}})
 
     @staticmethod
-    def _message_endpoint(nodes, messages, participant, side, node_type):
+    def _message_endpoint(nodes, messages, participant, side, node_type, counterpart_name):
         process_id = participant.get("processRef")
         endpoint_ids = {m.get(side) for m in messages if isinstance(m, Mapping)}
         candidates = [n for n in nodes if isinstance(n, dict) and n.get("processRef") == process_id
                       and (n.get("type") == node_type or n.get("id") in endpoint_ids)]
-        return candidates[0] if len(candidates) == 1 else None
+        if len(candidates)==1:return candidates[0]
+        role="send" if node_type=="sendTask" else "receive"
+        semantic=[n for n in nodes if isinstance(n,dict) and n.get("processRef")==process_id and
+                  (semantic_label_match(f"{role} {counterpart_name}",n.get("name")) or role in normalize_semantic_tokens(n.get("name")))]
+        return semantic[0] if len(semantic)==1 else None
 
     @classmethod
-    def _insert_endpoint(cls, workflow, participant, node_type, name, used):
+    def insert_node_into_process_sequence(cls, workflow, participant, node_type, name, used, position, report):
+        """Insert an endpoint by splitting one deterministic local sequence flow."""
         nodes, flows = workflow["nodes"], workflow["flows"]
         process_id, participant_id = participant.get("processRef"), participant.get("id")
         local = [n for n in nodes if isinstance(n, Mapping) and n.get("processRef") == process_id]
-        start = next((n for n in local if n.get("type") == "startEvent"), None)
-        end = next((n for n in local if n.get("type") == "endEvent"), None)
+        local_ids={n.get("id") for n in local}
+        local_flows=[f for f in flows if isinstance(f,dict) and f.get("source") in local_ids and f.get("target") in local_ids]
+        boundary_type="startEvent" if position=="after_start" else "endEvent"
+        boundaries=[n for n in local if n.get("type")==boundary_type]
+        if len(boundaries)!=1:return None
+        boundary_id=boundaries[0].get("id")
+        anchors=[f for f in local_flows if (f.get("source")==boundary_id if position=="after_start" else f.get("target")==boundary_id)]
+        if len(anchors)!=1:return None
+        anchor=anchors[0]
         endpoint = cls._add_node(nodes, used, f"{node_type}_{process_id}", node_type, name, process_id, participant_id)
-        direct = next((f for f in flows if isinstance(f, dict) and start and end and
-                       f.get("source") == start.get("id") and f.get("target") == end.get("id")), None)
-        if direct:
-            direct["target"] = endpoint["id"]
-            cls._add_flow(flows, used, endpoint["id"], end["id"], process_id)
-        elif start and not any(isinstance(f, Mapping) and f.get("source") == start.get("id") for f in flows):
-            cls._add_flow(flows, used, start["id"], endpoint["id"], process_id)
-        if end and not any(isinstance(f, Mapping) and f.get("target") == end.get("id") for f in flows):
-            cls._add_flow(flows, used, endpoint["id"], end["id"], process_id)
+        if position=="after_start":
+            successor=anchor["target"];anchor["target"]=endpoint["id"]
+            new_flow=cls._add_flow(flows,used,endpoint["id"],successor,process_id)
+        else:
+            predecessor=anchor["source"];anchor["source"]=endpoint["id"]
+            new_flow=cls._add_flow(flows,used,predecessor,endpoint["id"],process_id)
+        report["nodes_inserted"].append({"id":endpoint["id"],"processRef":process_id,"position":position})
+        report["flows_rewired"].append({"id":anchor.get("id"),"inserted_node":endpoint["id"],"new_flow":new_flow["id"]})
         return endpoint
+
+    @staticmethod
+    def resolve_participant(requirement_name, participants):
+        """Resolve exactly one existing participant through the shared matcher."""
+        matches=[p for p in participants if isinstance(p,dict) and semantic_label_match(requirement_name,p.get("name"))]
+        return matches[0] if len(matches)==1 else None
 
     @staticmethod
     def _process(identifier, name):

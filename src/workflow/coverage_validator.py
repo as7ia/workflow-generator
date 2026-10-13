@@ -3,10 +3,12 @@ from __future__ import annotations
 import re,unicodedata
 from collections.abc import Mapping
 
-_SEMANTIC_STOPWORDS={"le","la","les","un","une","de","du","des","au","aux","et","pour","sur","dans","par","the","to","of","and","for","service"}
+_SEMANTIC_STOPWORDS={"le","la","les","un","une","de","du","des","au","aux","et","pour","sur","dans","par","the","to","of","and","for","service","department","dept"}
 _SEMANTIC_ALIASES={
     "entreprise":"company","enterprise":"company","company":"company",
     "client":"client","customer":"client",
+    "commercial":"sales","sales":"sales","sale":"sales",
+    "financier":"finance","financiere":"finance","finance":"finance","financial":"finance",
     "demande":"request","request":"request","requests":"request",
     "reception":"receive","recevoir":"receive","recoit":"receive","recu":"receive",
     "receive":"receive","receives":"receive","received":"receive","receiving":"receive",
