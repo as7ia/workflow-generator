@@ -18,6 +18,7 @@ try:
         WorkflowRepairer,
         CoverageValidator,
         normalize_semantic_requirements,
+        ground_semantic_requirements,
         SemanticValidator,
         semantic_label_match,
     )
@@ -30,6 +31,7 @@ except ImportError:  # pragma: no cover - supports PYTHONPATH=src notebooks.
         WorkflowRepairer,
         CoverageValidator,
         normalize_semantic_requirements,
+        ground_semantic_requirements,
         SemanticValidator,
         semantic_label_match,
     )
@@ -117,7 +119,10 @@ class WorkflowCompiler:
         try:
             requirements_prompt=build_semantic_requirements_prompt(description)
             extracted=self._call_generator(result,"semantic_requirement",requirements_prompt)
-            requirements,requirement_issues=normalize_semantic_requirements(extracted,description)
+            result["pipeline_debug"]["semantic_requirements_raw"]=copy.deepcopy(extracted)
+            requirements,requirement_issues,grounding_report=ground_semantic_requirements(extracted,description)
+            result["pipeline_debug"]["semantic_requirements_grounded"]=copy.deepcopy(requirements)
+            result["pipeline_debug"]["requirement_grounding_report"]=copy.deepcopy(grounding_report)
             result["semantic_requirements"]=requirements
             if requirement_issues:return self._fail(result,"requirements_extraction",requirement_issues[0]["message"])
         except Exception as exc:
@@ -370,6 +375,9 @@ class WorkflowCompiler:
                 "before_coverage_validation": None,
                 "coverage_candidate": None,
                 "final_current_workflow": None,
+                "semantic_requirements_raw": None,
+                "semantic_requirements_grounded": None,
+                "requirement_grounding_report": None,
             },
         }
 

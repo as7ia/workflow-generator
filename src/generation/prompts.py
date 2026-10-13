@@ -11,6 +11,8 @@ def build_semantic_requirements_prompt(description:str)->str:
         "Interactions use participant names; preserve optional sourceLane/targetLane. One parallelism contains a branches array.\n"
         "A decision requires a genuine conditional choice and at least two outcomes; actions or states are not decisions.\n"
         "Keep every explicit actor action as an activity, including the first and last action. Distinguish it from a passive final state.\n"
+        "Process every sentence and clause. Accumulate all explicit activities, directed communications and conditional decisions; do not stop after the first match.\n"
+        "For if/else or si/sinon, emit one decision with a name and at least two outcomes. Repeated actions and loop-back wording must not erase activities.\n"
         "Timers use kind, value and optional activity. Do not duplicate a timer activity in activities. Deduplicate all requirements.\n"
         "Extract only facts explicitly supported by the description. Never infer a return message, acknowledgement, notification, participant, activity, timer or delay.\n"
         "An accepted, rejected, approved or completed state is not an interaction unless the text explicitly communicates it to another participant.\n"
