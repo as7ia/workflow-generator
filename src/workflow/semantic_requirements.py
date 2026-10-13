@@ -64,10 +64,7 @@ def normalize_semantic_requirements(raw,description=None):
             ambiguities.append({"message":"Decision requires a name and at least two outcomes.","requirement":item});continue
         decisions.append({"name":item["name"],"outcomes":outcomes})
     timer_activities={_norm(x.get("activity")) for x in timers if x.get("activity")}
-    activities=_dedupe([{"name":x.get("name","")} for x in collections["activities"]
-                        if _norm(x.get("name")) and _norm(x.get("name")) not in timer_activities
-                        and (not isinstance(description,str) or not _is_passive_end_state_activity(description,x.get("name")))],
-                       lambda x:_norm(x.get("name")))
+    activities=_dedupe([{"name":x.get("name","")} for x in collections["activities"] if _norm(x.get("name")) and _norm(x.get("name")) not in timer_activities],lambda x:_norm(x.get("name")))
     result={"participants":participants,"lanes":lanes,"timers":_dedupe(timers,lambda x:(x.get("kind"),x.get("value"),_norm(x.get("activity")))),
             "parallelisms":parallelisms,"decisions":_dedupe(decisions,lambda x:(_norm(x["name"]),tuple(_norm(v) for v in x["outcomes"]))),
             "interactions":interactions,"activities":activities,"ambiguities":_dedupe(ambiguities,lambda x:_norm(x.get("message") or x.get("name") or x.get("requirement")))}
@@ -121,21 +118,6 @@ def _has_temporal_evidence(description):
     if re.search(r"\b(?:every|each|tous?\s+les?|chaque|until|jusqu(?:a|')|deadline|echeance)\b",text):return True
     if re.search(r"\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}\s+(?:january|february|march|april|may|june|july|august|september|october|november|december|janvier|fevrier|mars|avril|mai|juin|juillet|aout|septembre|octobre|novembre|decembre)\b",text):return True
     return bool(re.search(r"\bP(?=\d|T)\d*(?:Y|M|W|D)(?:T\d+(?:H|M|S))?\b",description,re.I))
-def _role_stem(token):
-    for suffix in ("ing","ied","ed","es","s","ation","ment","er","ee","e"):
-        if len(token)>len(suffix)+3 and token.endswith(suffix):return token[:-len(suffix)]
-    return token
-def _is_passive_end_state_activity(description,activity):
-    ignored={"the","a","an","le","la","les","de","du","des"}
-    activity_terms={_role_stem(token) for token in _evidence_tokens(activity) if token not in ignored}
-    if not activity_terms:return False
-    passive=re.compile(r"\b(?:is|are|was|were|be|been|est|sont|ete)\s+([a-z]+(?:ed|en)|[a-z]+(?:e|ee|es|ees))\b")
-    for sentence in re.split(r"(?<=[.!?;])\s+|[\r\n]+",description):
-        tokens=_evidence_tokens(sentence)
-        if not passive.search(" ".join(tokens)):continue
-        sentence_terms={_role_stem(token) for token in tokens if token not in ignored|{"is","are","was","were","be","been","est","sont","ete"}}
-        if activity_terms<=sentence_terms:return True
-    return False
 def _valid_timer_value(kind,value):
     text=str(value or "").strip()
     if kind=="duration":return bool(re.fullmatch(r"P(?=.+)(?:\d+(?:\.\d+)?[YMWD])*(?:T(?:\d+(?:\.\d+)?[HMS])+)?",text))

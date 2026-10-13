@@ -105,7 +105,7 @@ def test_coverage_repair_rejects_empty_candidate_and_preserves_current_workflow(
 
 def test_coverage_repair_rejects_candidate_with_more_structural_errors():
     current=canonical_three_processes();candidate=copy.deepcopy(current)
-    candidate["nodes"].append({"id":"covered","type":"serviceTask","name":"Required coverage","processRef":"p1","participantRef":"participant_1","laneRef":None,"actor":None,"properties":{}})
+    candidate["nodes"].append({"id":"covered","type":"invalid","name":"Required coverage","processRef":"p1","participantRef":"participant_1","laneRef":None,"actor":None,"properties":{}})
     candidate["flows"]=[]
     requirements=coverage_requirements();errors=CoverageValidator().validate(requirements,current)
     result,report=WorkflowRepairer(1).repair(current,errors,Queue(candidate),requirements=requirements,repair_kind="coverage")

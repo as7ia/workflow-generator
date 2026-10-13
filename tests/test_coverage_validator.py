@@ -197,14 +197,14 @@ def test_complete_multilingual_coverage_uses_participant_lane_and_message_endpoi
     missing={issue["code"] for issue in CoverageValidator().validate(req,w)}
     assert not ({"MISSING_PARTICIPANT","MISSING_LANE","MISSING_ACTIVITY","MISSING_INTERACTION"} & missing)
 
-def test_semantically_labeled_terminal_events_do_not_replace_activities():
+def test_semantically_labeled_terminal_events_cover_activities():
     w=workflow()
     w["nodes"].extend([
         node("approved_end","Approve Request","endEvent","pa"),
         node("rejected_end","Reject Request","endEvent","pa"),
     ])
     req=requirements(activities=[{"name":"Approval of request"},{"name":"Rejection of request"}])
-    assert "MISSING_ACTIVITY" in codes(req,w)
+    assert "MISSING_ACTIVITY" not in codes(req,w)
 
 def test_terminal_event_requires_a_semantically_equivalent_label():
     w=workflow();w["nodes"].append(node("rejected_end","Reject Request","endEvent","pa"))

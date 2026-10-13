@@ -18,7 +18,6 @@ try:
         WorkflowRepairer,
         CoverageValidator,
         normalize_semantic_requirements,
-        semantic_label_match,
     )
 except ImportError:  # pragma: no cover - supports PYTHONPATH=src notebooks.
     from bpmn import BPMNGenerator, BPMNLayoutEngine
@@ -29,7 +28,6 @@ except ImportError:  # pragma: no cover - supports PYTHONPATH=src notebooks.
         WorkflowRepairer,
         CoverageValidator,
         normalize_semantic_requirements,
-        semantic_label_match,
     )
 
 from .prompts import build_generation_prompt, build_semantic_requirements_prompt
@@ -144,7 +142,6 @@ class WorkflowCompiler:
         preparer = CanonicalWorkflowPreparer(schema)
         try:
             normalized,normalization_report=self._normalizer.normalize_with_report(dict(raw))
-            normalized=self._align_semantic_roles(normalized,requirements)
             result["pipeline_debug"]["after_normalization"] = self._workflow_counts(normalized)
             if not self.is_meaningful_workflow(normalized):
                 return self._fail(result,"generation","La génération n'a produit aucun workflow exploitable.")
@@ -399,44 +396,6 @@ class WorkflowCompiler:
         if supports_limit:
             return cast(dict[str, Any], generate_json(prompt, max_new_tokens=token_limit))
         return cast(dict[str, Any], generate_json(prompt))
-
-    @staticmethod
-    def _align_semantic_roles(workflow: dict[str, Any],requirements: Mapping[str, Any]) -> dict[str, Any]:
-        """Separate business activities from structural start/end events."""
-        aligned=copy.deepcopy(workflow)
-        nodes=aligned.get("nodes",[]);flows=aligned.get("flows",[]);messages=aligned.get("messageFlows",[])
-        activities=requirements.get("activities",[]) if isinstance(requirements,Mapping) else []
-        if not all(isinstance(value,list) for value in (nodes,flows,messages,activities)):return aligned
-        message_sources={item.get("source") for item in messages if isinstance(item,Mapping)}
-        message_targets={item.get("target") for item in messages if isinstance(item,Mapping)}
-        used_node_ids={item.get("id") for item in nodes if isinstance(item,Mapping)}
-        used_flow_ids={item.get("id") for item in flows if isinstance(item,Mapping)}
-        task_types={"userTask","serviceTask","manualTask","scriptTask","businessRuleTask","sendTask","receiveTask","subProcess"}
-        for requirement in activities:
-            name=requirement.get("name") if isinstance(requirement,Mapping) else None
-            if not isinstance(name,str):continue
-            matching=[node for node in nodes if isinstance(node,dict) and semantic_label_match(name,node.get("name"))]
-            if any(node.get("type") in task_types for node in matching):continue
-            event_matches=[node for node in matching if node.get("type") in {"startEvent","endEvent"}]
-            if len(event_matches)!=1:continue
-            node=event_matches[0];node_id=node.get("id");old_type=node.get("type")
-            node["type"]="sendTask" if node_id in message_sources else "receiveTask" if node_id in message_targets else "serviceTask"
-            base=f"{'start' if old_type=='startEvent' else 'end'}_{node.get('processRef') or 'process'}"
-            event_id=WorkflowCompiler._unique_semantic_id(base,used_node_ids);used_node_ids.add(event_id)
-            nodes.append({"id":event_id,"type":old_type,"name":"Start" if old_type=="startEvent" else "End",
-                          "processRef":node.get("processRef"),"participantRef":node.get("participantRef"),
-                          "laneRef":None,"actor":None,"properties":{"synthetic":True}})
-            source,target=(event_id,node_id) if old_type=="startEvent" else (node_id,event_id)
-            flow_id=WorkflowCompiler._unique_semantic_id(f"flow_{source}_{target}",used_flow_ids);used_flow_ids.add(flow_id)
-            flows.append({"id":flow_id,"source":source,"target":target,"processRef":node.get("processRef"),
-                          "condition":None,"isDefault":False,"properties":{"synthetic":True}})
-        return aligned
-
-    @staticmethod
-    def _unique_semantic_id(base: str,used: set[Any]) -> str:
-        candidate=base;suffix=2
-        while candidate in used:candidate=f"{base}_{suffix}";suffix+=1
-        return candidate
 
     @staticmethod
     def _workflow_counts(workflow: Mapping[str, Any]) -> dict[str, int]:
