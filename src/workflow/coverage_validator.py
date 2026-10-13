@@ -66,7 +66,8 @@ class CoverageValidator:
             timer_requirements.append(req)
             if not self._matching_timers(req,timer_nodes):issues.append(self._missing("timers",req,self._rank(req,timer_nodes,self._timer_score)))
         timer_activities=[req.get("activity") for req in timer_requirements if req.get("activity")]
-        activity_nodes=[n for n in nodes if n.get("type")!="startEvent"]
+        activity_types={"userTask","serviceTask","manualTask","scriptTask","businessRuleTask","sendTask","receiveTask","subProcess"}
+        activity_nodes=[n for n in nodes if n.get("type") in activity_types]
         for req in self._valid(requirements,"activities",("name",)):
             if any(self._text_match(req["name"],name) for name in timer_activities):continue
             if not any(self._name_match(req["name"],n) for n in activity_nodes):issues.append(self._missing("activities",req,self._rank(req,activity_nodes,self._name_score)))
