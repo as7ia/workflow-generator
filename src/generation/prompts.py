@@ -11,6 +11,9 @@ def build_semantic_requirements_prompt(description:str)->str:
         "Interactions use participant names; preserve optional sourceLane/targetLane. One parallelism contains a branches array.\n"
         "A decision requires a genuine conditional choice and at least two outcomes; actions or states are not decisions.\n"
         "Timers use kind, value and optional activity. Do not duplicate a timer activity in activities. Deduplicate all requirements.\n"
+        "Extract only facts explicitly supported by the description. Never infer a return message, acknowledgement, notification, participant, activity, timer or delay.\n"
+        "An accepted, rejected, approved or completed state is not an interaction unless the text explicitly communicates it to another participant.\n"
+        "Create a timer only when the description contains an explicit duration, date, recurrence or deadline; never invent a default duration.\n"
         "Recognize concurrency, delays, actors, internal roles, conditions, communications and required activities.\n"
         f"Description:\n{description}\nReturn JSON only.")
 

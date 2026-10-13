@@ -113,7 +113,7 @@ class WorkflowCompiler:
         try:
             requirements_prompt=build_semantic_requirements_prompt(description)
             extracted=self._call_generator(result,"semantic_requirement",requirements_prompt)
-            requirements,requirement_issues=normalize_semantic_requirements(extracted)
+            requirements,requirement_issues=normalize_semantic_requirements(extracted,description)
             result["semantic_requirements"]=requirements
             if requirement_issues:return self._fail(result,"requirements_extraction",requirement_issues[0]["message"])
         except Exception as exc:
