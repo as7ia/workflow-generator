@@ -185,6 +185,9 @@ class WorkflowCompiler:
                     generator=_PhaseGenerator(self,result,"structural_repair"),
                     workflow_is_prepared=True,
                 )
+                preservation=WorkflowRepairer.structural_preservation_report(current_workflow,repaired_workflow,blocking)
+                if preservation["destructive_candidate"]:
+                    repaired_workflow=copy.deepcopy(current_workflow)
                 prepared = preparer.validate_prepared(repaired_workflow)
                 accepted_workflow = copy.deepcopy(prepared["workflow"])
                 result["warnings"].extend(

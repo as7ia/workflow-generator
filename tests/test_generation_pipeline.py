@@ -42,6 +42,15 @@ def test_zero_repair_attempts_never_calls_generator_for_repair():
     assert result["error"]["stage"]=="repair" and len(g.prompts)==1 and result["repair_report"]==[]
     assert result["pipeline_debug"]["after_structural_repair"]==result["pipeline_debug"]["final_current_workflow"]
 
+def test_destructive_structural_candidate_never_replaces_current_workflow():
+    broken=v2(nodes=[n("s",t="startEvent"),n("task")],flows=[f("f","s","task")])
+    empty=v2(nodes=[],flows=[])
+    result=compiler(broken,empty).compile("x")
+    assert not result["success"] and result["error"]["stage"]=="repair"
+    assert {node["id"] for node in result["normalized_workflow"]["nodes"]}=={"s","task"}
+    assert result["repair_report"][0]["accepted_candidate"] is False
+    assert result["repair_report"][0]["destructive_candidate"] is True
+
 def test_global_generation_budget_stops_before_extra_repair_call():
     bad=v2(nodes=[n("s",t="startEvent"),n("t")],flows=[f("f","s","t")]);g=Generator(bad,v2())
     c=WorkflowCompiler(g,SCHEMA,max_repair_attempts=3,max_total_generation_calls=2);c._bpmn_generator=Xml()
@@ -146,8 +155,9 @@ def test_structural_repair_precedes_coverage_repair():
     assert "MISSING_TIMER" in g.prompts[2] and "P2D" in g.prompts[2]
 
 def test_rejected_coverage_candidate_does_not_replace_structural_success():
-    broken=v2(nodes=[n("s",t="startEvent"),n("task")],flows=[f("f","s","task")])
     processes=("client_process","company_process","bank_process")
+    broken=v2((processes[0],),nodes=[n("client_process_0",processes[0],"startEvent"),n("client_process_1",processes[0])],
+              flows=[f("client_process_f0","client_process_0","client_process_1",processes[0])])
     participant_names=("Client","Entreprise","Banque")
     participants=[];nodes=[];flows=[]
     for process,name in zip(processes,participant_names):

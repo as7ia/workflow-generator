@@ -46,7 +46,9 @@ def test_structural_prompt_contains_only_unique_blocking_errors():
     assert prompt.count("PROCESS_MISSING_END_EVENT")==1
     assert "LOOP_DETECTED" not in prompt and "ignored" not in prompt
 def test_report_shape():
-    _,report=WorkflowRepairer().repair(v1(False),ERROR,Queue(v1()));assert set(report[0])=={"attempt","status","input_errors","output_errors","message","accepted_candidate","errors_before","errors_after"}
+    _,report=WorkflowRepairer().repair(v1(False),ERROR,Queue(v1()))
+    assert {"attempt","status","input_errors","output_errors","message","accepted_candidate","errors_before","errors_after"}<=set(report[0])
+    assert {"original_counts","candidate_counts","removed_node_ids","destructive_candidate","rejection_reason"}<=set(report[0])
 def test_invalid_generator_output_reported():
     _,report=WorkflowRepairer(1).repair(v1(False),ERROR,Queue("bad"));assert any(e["code"]=="GENERATOR_INVALID_OUTPUT" for e in report[0]["output_errors"])
 def test_generator_exception_reported():
@@ -136,3 +138,43 @@ def test_coverage_repair_accepts_additive_timer_with_identical_structure():
     result,report=WorkflowRepairer(1).repair(current,errors,Queue(candidate),requirements=requirements,repair_kind="coverage",workflow_is_prepared=True)
     assert any(node["id"]=="timer_required" for node in result["nodes"])
     assert report[0]["coverage_repair"]["accepted_candidate"] is True
+
+def test_structural_repair_rejects_empty_candidate_even_when_it_has_no_errors():
+    original=canonical_three_processes();original["flows"]=[]
+    empty={"schemaVersion":"2.0","processes":[{"id":"replacement","name":"Replacement","description":"","executable":False,"properties":{}}],"participants":[],"lanes":[],"nodes":[],"flows":[],"messageFlows":[],"ambiguities":[]}
+    errors=SemanticValidator().validate(original)
+    result,report=WorkflowRepairer(1).repair(original,errors,Queue(empty),repair_kind="structural",workflow_is_prepared=True)
+    assert result==original and report[0]["accepted_candidate"] is False
+    assert report[0]["destructive_candidate"] is True
+    assert report[0]["rejection_reason"]=="Candidate removed all business nodes"
+    assert report[0]["candidate_counts"]["nodes"]==0 and report[0]["removed_participant_ids"]
+
+def test_structural_repair_rejects_mass_replacement_by_start_and_end():
+    original=canonical_three_processes();original["flows"]=[]
+    candidate={"schemaVersion":"2.0","processes":[copy.deepcopy(original["processes"][0])],"participants":[],"lanes":[],
+               "nodes":[{"id":"new_start","type":"startEvent","name":"Start","processRef":"p1","participantRef":None,"laneRef":None,"actor":None,"properties":{}},
+                        {"id":"new_end","type":"endEvent","name":"End","processRef":"p1","participantRef":None,"laneRef":None,"actor":None,"properties":{}}],
+               "flows":[{"id":"new_flow","source":"new_start","target":"new_end","processRef":"p1","condition":None,"isDefault":False,"properties":{}}],"messageFlows":[],"ambiguities":[]}
+    errors=SemanticValidator().validate(original)
+    result,report=WorkflowRepairer(1).repair(original,errors,Queue(candidate),repair_kind="structural",workflow_is_prepared=True)
+    assert result==original and report[0]["destructive_candidate"] is True
+    assert set(report[0]["removed_node_ids"])=={node["id"] for node in original["nodes"]}
+
+def test_structural_repair_accepts_local_end_event_addition():
+    original={"schemaVersion":"2.0","processes":[{"id":"p","name":"P","description":"","executable":False,"properties":{}}],"participants":[],"lanes":[],
+              "nodes":[{"id":"start","type":"startEvent","name":"Start","processRef":"p","participantRef":None,"laneRef":None,"actor":None,"properties":{}},
+                       {"id":"task","type":"serviceTask","name":"Work","processRef":"p","participantRef":None,"laneRef":None,"actor":None,"properties":{}}],
+              "flows":[{"id":"f1","source":"start","target":"task","processRef":"p","condition":None,"isDefault":False,"properties":{}}],"messageFlows":[],"ambiguities":[]}
+    candidate=copy.deepcopy(original);candidate["nodes"].append({"id":"end","type":"endEvent","name":"End","processRef":"p","participantRef":None,"laneRef":None,"actor":None,"properties":{}});candidate["flows"].append({"id":"f2","source":"task","target":"end","processRef":"p","condition":None,"isDefault":False,"properties":{}})
+    errors=SemanticValidator().validate(original)
+    result,report=WorkflowRepairer(1).repair(original,errors,Queue(candidate),repair_kind="structural",workflow_is_prepared=True)
+    assert result==candidate and report[0]["accepted_candidate"] is True and report[0]["destructive_candidate"] is False
+
+def test_structural_repair_preserves_collaboration_while_fixing_ownership():
+    original=canonical_three_processes();original["messageFlows"]=[{"id":"message","source":"p1_a","target":"p2_a","properties":{}}]
+    next(node for node in original["nodes"] if node["id"]=="p2_a")["processRef"]="p1"
+    candidate=copy.deepcopy(original);next(node for node in candidate["nodes"] if node["id"]=="p2_a")["processRef"]="p2"
+    errors=SemanticValidator().validate(original)
+    result,report=WorkflowRepairer(1).repair(original,errors,Queue(candidate),repair_kind="structural",workflow_is_prepared=True)
+    assert result["participants"]==original["participants"] and result["processes"]==original["processes"]
+    assert result["messageFlows"]==original["messageFlows"] and report[0]["destructive_candidate"] is False

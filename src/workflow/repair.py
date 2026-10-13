@@ -127,8 +127,12 @@ class WorkflowRepairer:
             output_errors = [*candidate_structural,*candidate_coverage]
             candidate_score = self._score(output_errors)
             current_score = self._score(current_errors)
+            structural_diagnostic=(self.structural_preservation_report(current,candidate,input_errors)
+                                   if repair_kind=="structural" else None)
             accepted_candidate = (self._coverage_candidate_acceptable(current,candidate,current_structural,candidate_structural,current_coverage,candidate_coverage)
-                                  if repair_kind=="coverage" else candidate_score<current_score)
+                                  if repair_kind=="coverage" else
+                                  candidate_score<current_score and not structural_diagnostic["destructive_candidate"]
+                                  and not self._introduces_grave_structural_errors(current_structural,candidate_structural))
             if accepted_candidate and candidate_score < best_score:
                 best = copy.deepcopy(candidate)
                 best_score = candidate_score
@@ -145,6 +149,7 @@ class WorkflowRepairer:
                         True,
                         self._error_count(current_errors),
                         coverage_diagnostic,
+                        structural_diagnostic,
                     )
                 )
                 return candidate, report
@@ -159,6 +164,7 @@ class WorkflowRepairer:
                     accepted_candidate,
                     self._error_count(current_errors),
                     coverage_diagnostic,
+                    structural_diagnostic,
                 )
             )
             if accepted_candidate:
@@ -239,6 +245,7 @@ class WorkflowRepairer:
         accepted_candidate: bool = False,
         errors_before: int | None = None,
         coverage_repair: dict[str, Any] | None = None,
+        structural_repair: dict[str, Any] | None = None,
     ) -> RepairAttempt:
         """Build one stable attempt report entry."""
         return {
@@ -251,11 +258,49 @@ class WorkflowRepairer:
             "errors_before": errors_before if errors_before is not None else WorkflowRepairer._error_count(input_errors),
             "errors_after": WorkflowRepairer._error_count(output_errors),
             **({"coverage_repair": copy.deepcopy(coverage_repair)} if coverage_repair is not None else {}),
+            **(copy.deepcopy(structural_repair) if structural_repair is not None else {}),
         }
 
     @staticmethod
     def _error_count(errors: list[RepairError]) -> int:
         return sum(error.get("severity","error")=="error" for error in errors)
+
+    @classmethod
+    def structural_preservation_report(cls,original,candidate,errors=None):
+        keys=("processes","participants","lanes","nodes","flows","messageFlows")
+        def ids(workflow,key):
+            value=workflow.get(key,[]) if isinstance(workflow,Mapping) else []
+            return {item.get("id") for item in value if isinstance(item,Mapping) and item.get("id")}
+        original_ids={key:ids(original,key) for key in keys};candidate_ids={key:ids(candidate,key) for key in keys}
+        removed={key:sorted(original_ids[key]-candidate_ids[key]) for key in keys}
+        counts=lambda workflow:{key:len(workflow.get(key,[])) if isinstance(workflow,Mapping) and isinstance(workflow.get(key),list) else 0 for key in keys}
+        original_counts=counts(original);candidate_counts=counts(candidate)
+        reason=None
+        if original_counts["nodes"]>0 and candidate_counts["nodes"]==0:reason="Candidate removed all business nodes"
+        elif original_counts["processes"]>0 and candidate_counts["processes"]==0:reason="Candidate removed all processes"
+        elif original_counts["participants"]>0 and candidate_counts["participants"]==0:reason="Candidate removed all participants"
+        elif original_counts["messageFlows"]>0 and candidate_counts["messageFlows"]==0:reason="Candidate removed all message flows"
+        elif any(removed[key] for key in ("processes","participants","lanes","nodes","messageFlows")):
+            key=next(key for key in ("processes","participants","lanes","nodes","messageFlows") if removed[key])
+            reason=f"Candidate removed existing {key} IDs"
+        elif original_counts["flows"]>0 and candidate_counts["flows"]==0:
+            reason="Candidate removed all sequence flows"
+        return {"original_counts":original_counts,"candidate_counts":candidate_counts,
+                "removed_process_ids":removed["processes"],"removed_participant_ids":removed["participants"],
+                "removed_lane_ids":removed["lanes"],"removed_node_ids":removed["nodes"],
+                "removed_flow_ids":removed["flows"],"removed_message_flow_ids":removed["messageFlows"],
+                "destructive_candidate":reason is not None,"rejection_reason":reason}
+
+    @staticmethod
+    def _introduces_grave_structural_errors(before,after):
+        strict={"JSON_SCHEMA_ERROR","UNKNOWN_NODE_PROCESS","UNKNOWN_NODE_PARTICIPANT","UNKNOWN_NODE_LANE",
+                "UNKNOWN_FLOW_PROCESS","UNKNOWN_MESSAGE_FLOW_SOURCE","UNKNOWN_MESSAGE_FLOW_TARGET"}
+        contextual={"PROCESS_MISSING_END_EVENT","NO_PATH_TO_END"}
+        for code in strict|contextual:
+            previous=sum(item.get("code")==code and item.get("severity","error")=="error" for item in before)
+            current=sum(item.get("code")==code and item.get("severity","error")=="error" for item in after)
+            if (code in strict and current>previous) or (code in contextual and previous==0 and current>0):return True
+        return False
 
     @classmethod
     def _coverage_candidate_acceptable(cls,current,candidate,current_structural,candidate_structural,current_coverage,candidate_coverage):
