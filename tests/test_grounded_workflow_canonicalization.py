@@ -518,3 +518,68 @@ def test_only_synthetic_reverse_edge_is_removed_when_grounded_order_proves_direc
     preserved,_=GroundedWorkflowCanonicalizer.canonicalize(genuine,requirements(
         activities=[{"name":"Verify Document"},{"name":"Approve Document"}]))
     assert any(flow["source"]=="second" and flow["target"]=="first" for flow in preserved["flows"])
+
+
+def test_process_split_preserves_source_boundaries_and_creates_extracted_boundaries():
+    value=workflow();value["participants"].append({"id":"participant_b","name":"B","processRef":"process_a","properties":{}})
+    value["nodes"]=[
+        {"id":"shared_start","type":"startEvent","name":"Start","processRef":"process_a","participantRef":"participant_b","laneRef":None,"actor":None,"properties":{}},
+        {"id":"task_a","type":"serviceTask","name":"Work A","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}},
+        {"id":"task_b","type":"serviceTask","name":"Work B","processRef":"process_a","participantRef":"participant_b","laneRef":None,"actor":None,"properties":{}},
+        {"id":"shared_end","type":"endEvent","name":"End","processRef":"process_a","participantRef":"participant_b","laneRef":None,"actor":None,"properties":{}},
+    ]
+    value["flows"]=[
+        {"id":"split_1","source":"shared_start","target":"task_a","processRef":"process_a","properties":{}},
+        {"id":"split_2","source":"task_a","target":"task_b","processRef":"process_a","properties":{}},
+        {"id":"split_3","source":"task_b","target":"shared_end","processRef":"process_a","properties":{}},
+    ]
+    fixed,report=GroundedWorkflowCanonicalizer.canonicalize(value,requirements(participants=[{"name":"A"},{"name":"B"}]))
+    participant_b=next(p for p in fixed["participants"] if p["id"]=="participant_b")
+    assert participant_b["processRef"]!="process_a"
+    source_nodes=[n for n in fixed["nodes"] if n["processRef"]=="process_a"]
+    extracted_nodes=[n for n in fixed["nodes"] if n["processRef"]==participant_b["processRef"]]
+    assert {n["id"] for n in source_nodes if n["type"] in {"startEvent","endEvent"}}=={"shared_start","shared_end"}
+    assert {n["type"] for n in extracted_nodes}>={"startEvent","serviceTask","endEvent"}
+    assert next(n for n in fixed["nodes"] if n["id"]=="shared_start")["participantRef"]=="participant_a"
+    blocking={"PROCESS_MISSING_START_EVENT","PROCESS_MISSING_END_EVENT","UNREACHABLE_NODE","NO_PATH_TO_END"}
+    assert blocking.isdisjoint(issue["code"] for issue in SemanticValidator().validate(fixed))
+    assert len(report["boundary_event_reassignments"])==2
+    assert all(item["status"] in {"valid","repaired"} for item in report["process_boundary_report"])
+
+
+def test_three_participants_split_into_three_bounded_reachable_processes():
+    value=workflow();value["participants"] += [
+        {"id":"participant_b","name":"B","processRef":"process_a","properties":{}},
+        {"id":"participant_c","name":"C","processRef":"process_a","properties":{}},
+    ]
+    value["nodes"]=[
+        {"id":"start","type":"startEvent","name":"Start","processRef":"process_a","participantRef":"participant_c","laneRef":None,"actor":None,"properties":{}},
+        {"id":"a","type":"serviceTask","name":"A work","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}},
+        {"id":"b","type":"serviceTask","name":"B work","processRef":"process_a","participantRef":"participant_b","laneRef":None,"actor":None,"properties":{}},
+        {"id":"c","type":"serviceTask","name":"C work","processRef":"process_a","participantRef":"participant_c","laneRef":None,"actor":None,"properties":{}},
+        {"id":"end","type":"endEvent","name":"End","processRef":"process_a","participantRef":"participant_c","laneRef":None,"actor":None,"properties":{}},
+    ]
+    value["flows"]=[{"id":f"three_{index}","source":source,"target":target,"processRef":"process_a","properties":{}}
+                    for index,(source,target) in enumerate((("start","a"),("a","b"),("b","c"),("c","end")),1)]
+    fixed,_=GroundedWorkflowCanonicalizer.canonicalize(value,requirements(
+        participants=[{"name":"A"},{"name":"B"},{"name":"C"}]))
+    assert len({p["processRef"] for p in fixed["participants"]})==3
+    for process_id in {p["processRef"] for p in fixed["participants"]}:
+        local=[n for n in fixed["nodes"] if n["processRef"]==process_id]
+        assert any(n["type"]=="startEvent" for n in local)
+        assert any(n["type"]=="endEvent" for n in local)
+    assert not [issue for issue in SemanticValidator().validate(fixed) if issue["code"]=="UNREACHABLE_NODE"]
+
+
+def test_missing_start_with_multiple_local_roots_is_reported_ambiguous():
+    value=workflow();value["nodes"]=[
+        {"id":"root_1","type":"serviceTask","name":"First","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}},
+        {"id":"root_2","type":"serviceTask","name":"Second","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}},
+        {"id":"end","type":"endEvent","name":"End","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}},
+    ]
+    value["flows"]=[{"id":"amb_1","source":"root_1","target":"end","processRef":"process_a","properties":{}},
+                    {"id":"amb_2","source":"root_2","target":"end","processRef":"process_a","properties":{}}]
+    fixed,report=GroundedWorkflowCanonicalizer.canonicalize(value,requirements(participants=[{"name":"A"}]))
+    diagnostic=next(item for item in report["process_boundary_report"] if item["process_id"]=="process_a")
+    assert diagnostic["status"]=="ambiguous" and set(diagnostic["root_candidates"])=={"root_1","root_2"}
+    assert not any(node["type"]=="startEvent" for node in fixed["nodes"])

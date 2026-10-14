@@ -36,13 +36,16 @@ class GroundedWorkflowCanonicalizer:
             "interaction_messageflow_rollbacks": [],
             "process_continuity_repairs": [], "premature_end_repairs": [],
             "orphan_business_components": [], "artificial_cycles_rejected": [],
+            "process_boundary_report": [], "boundary_event_reassignments": [],
+            "process_split_flows_removed": [],
         }
         cls._ensure_participant_processes(value, requirements, report)
+        cls._ensure_process_boundaries(value, report)
         cls._ensure_required_lanes(value, requirements, report)
         cls._normalize_timer_nodes(value, requirements, report)
-        cls._materialize_decisions(value,requirements,report)
         cls._reclassify_local_messages(value, requirements, report)
         cls._ensure_interactions(value, requirements, report)
+        cls._materialize_decisions(value,requirements,report)
         cls._repair_artificial_two_node_cycles(value, requirements, report)
         cls._ensure_local_process_continuity(value, report)
         return value, report
@@ -136,9 +139,11 @@ class GroundedWorkflowCanonicalizer:
         participants = workflow.setdefault("participants", [])
         nodes = workflow.setdefault("nodes", [])
         flows = workflow.setdefault("flows", [])
+        messages = workflow.setdefault("messageFlows", [])
         lanes = workflow.setdefault("lanes", [])
-        if not all(isinstance(items, list) for items in (processes, participants, nodes, flows, lanes)):
+        if not all(isinstance(items, list) for items in (processes, participants, nodes, flows, messages, lanes)):
             return
+        original_node_process={n.get("id"):n.get("processRef") for n in nodes if isinstance(n,Mapping)}
         used = cls._all_ids(workflow)
         process_ids = {item.get("id") for item in processes if isinstance(item, Mapping)}
         required = requirements.get("participants", []) if isinstance(requirements, Mapping) else []
@@ -187,7 +192,12 @@ class GroundedWorkflowCanonicalizer:
                 report["processes_added"].append({"id": process_id, "participant": participant.get("id")})
             owners.setdefault(process_id, []).append(participant)
         process_by_id = {p.get("id"): p for p in processes if isinstance(p, Mapping)}
+        boundary_counts={}
+        for node in nodes:
+            if isinstance(node,Mapping) and node.get("type") in {"startEvent","endEvent"}:
+                marker=(node.get("processRef"),node.get("type"));boundary_counts[marker]=boundary_counts.get(marker,0)+1
         for process_id, members in owners.items():
+            primary=members[0]
             for participant in members[1:]:
                 participant_id = participant.get("id")
                 new_id = cls._unique_id(f"{process_id}_{cls._slug(participant_id)}", used); used.add(new_id)
@@ -199,7 +209,27 @@ class GroundedWorkflowCanonicalizer:
                 participant["processRef"] = new_id
                 for node in nodes:
                     if isinstance(node, dict) and node.get("participantRef") == participant_id:
-                        node["processRef"] = new_id
+                        if node.get("type") in {"startEvent","endEvent"}:
+                            if boundary_counts.get((process_id,node.get("type")),0)>1:
+                                node["processRef"]=new_id
+                                report["boundary_event_reassignments"].append({
+                                    "node_id":node.get("id"),"type":node.get("type"),
+                                    "processRef_before":process_id,"processRef_after":new_id,
+                                    "participantRef_before":participant_id,"participantRef_after":participant_id,
+                                    "reason":"boundary ownership is unambiguous",
+                                })
+                            else:
+                                previous_participant=node.get("participantRef")
+                                node["participantRef"]=primary.get("id")
+                                node["laneRef"]=None
+                                report["boundary_event_reassignments"].append({
+                                    "node_id":node.get("id"),"type":node.get("type"),
+                                    "processRef_before":process_id,"processRef_after":process_id,
+                                    "participantRef_before":previous_participant,"participantRef_after":primary.get("id"),
+                                    "reason":"preserve unique source process boundary",
+                                })
+                        else:
+                            node["processRef"] = new_id
                 for lane in lanes:
                     if isinstance(lane, dict) and lane.get("participantRef") == participant_id:
                         lane["processRef"] = new_id
@@ -209,6 +239,28 @@ class GroundedWorkflowCanonicalizer:
                             and node_process.get(flow.get("target")) == new_id):
                         flow["processRef"] = new_id
                 report["processes_added"].append({"id": new_id, "participant": participant_id})
+
+        # A sequence flow cannot survive a split when its endpoints now belong
+        # to different processes. Grounded interactions are materialized later.
+        node_process={n.get("id"):n.get("processRef") for n in nodes if isinstance(n,Mapping)}
+        retained=[]
+        for flow in flows:
+            if not isinstance(flow,dict):retained.append(flow);continue
+            source=flow.get("source",flow.get("sourceRef"));target=flow.get("target",flow.get("targetRef"))
+            source_process=node_process.get(source);target_process=node_process.get(target)
+            split_created_crossing=(original_node_process.get(source)==original_node_process.get(target)
+                                    and source_process and target_process and source_process!=target_process)
+            if split_created_crossing:
+                report["process_split_flows_removed"].append({"id":flow.get("id"),"source":source,"target":target,
+                                                               "source_process":source_process,"target_process":target_process})
+                message={"id":flow.get("id"),"source":source,"target":target,
+                         "properties":copy.deepcopy(flow.get("properties",{}))}
+                if flow.get("name") is not None:message["name"]=flow.get("name")
+                messages.append(message)
+                continue
+            if source_process and source_process==target_process:flow["processRef"]=source_process
+            retained.append(flow)
+        flows[:]=retained
 
         # A grounded participant is valid even before an interaction endpoint is added.
         for participant in participants:
@@ -221,7 +273,85 @@ class GroundedWorkflowCanonicalizer:
             end = cls._add_node(nodes, used, f"end_{process_id}", "endEvent", "End", process_id, participant_id)
             cls._add_flow(flows, used, start["id"], end["id"], process_id)
 
-        cls._complete_participant_processes(workflow, used)
+
+    @classmethod
+    def _ensure_process_boundaries(cls,workflow,report):
+        """Transactionally add only unambiguous local process boundaries."""
+        used=cls._all_ids(workflow)
+        participants=[p for p in workflow.get("participants",[]) if isinstance(p,Mapping)]
+        for process in [p for p in workflow.get("processes",[]) if isinstance(p,Mapping)]:
+            process_id=process.get("id");candidate=copy.deepcopy(workflow)
+            nodes=[n for n in candidate.get("nodes",[]) if isinstance(n,Mapping) and n.get("processRef")==process_id]
+            if not nodes:continue
+            ids={n.get("id") for n in nodes};all_flows=candidate.get("flows",[])
+            def endpoints(flow):return flow.get("source",flow.get("sourceRef")),flow.get("target",flow.get("targetRef"))
+            flows=[f for f in all_flows if isinstance(f,Mapping) and f.get("processRef")==process_id
+                   and endpoints(f)[0] in ids and endpoints(f)[1] in ids]
+            incoming={identifier:0 for identifier in ids};outgoing={identifier:0 for identifier in ids}
+            for flow in flows:
+                source,target=endpoints(flow);outgoing[source]+=1;incoming[target]+=1
+            starts=[n for n in nodes if n.get("type")=="startEvent"]
+            ends=[n for n in nodes if n.get("type")=="endEvent"]
+            business=[n for n in nodes if n.get("type") not in {"startEvent","endEvent"}]
+            roots=[n for n in business if incoming[n.get("id")]==0]
+            terminals=[n for n in business if outgoing[n.get("id")]==0]
+            detail={"process_id":process_id,"starts_before":[n.get("id") for n in starts],
+                    "ends_before":[n.get("id") for n in ends],"root_candidates":[n.get("id") for n in roots],
+                    "terminal_candidates":[n.get("id") for n in terminals],"created_start":None,"created_end":None}
+            owner=next((p for p in participants if p.get("processRef")==process_id),None)
+            candidate_used=set(used);changed=False;ambiguous=False
+            if not starts:
+                if len(roots)==1 and owner is not None:
+                    start=cls._add_node(candidate["nodes"],candidate_used,f"start_{process_id}","startEvent","Start",process_id,owner.get("id"))
+                    cls._add_flow(candidate["flows"],candidate_used,start["id"],roots[0]["id"],process_id)
+                    detail["created_start"]=start["id"];changed=True
+                else:ambiguous=True
+            elif len(starts)==1 and outgoing[starts[0].get("id")]==0 and len(roots)==1:
+                cls._add_flow(candidate["flows"],candidate_used,starts[0]["id"],roots[0]["id"],process_id);changed=True
+            if not ends:
+                if len(terminals)==1 and owner is not None:
+                    end=cls._add_node(candidate["nodes"],candidate_used,f"end_{process_id}","endEvent","End",process_id,owner.get("id"))
+                    cls._add_flow(candidate["flows"],candidate_used,terminals[0]["id"],end["id"],process_id)
+                    detail["created_end"]=end["id"];changed=True
+                else:ambiguous=True
+            elif len(ends)==1 and incoming[ends[0].get("id")]==0 and len(terminals)==1:
+                cls._add_flow(candidate["flows"],candidate_used,terminals[0]["id"],ends[0]["id"],process_id);changed=True
+            candidate_nodes=[n for n in candidate.get("nodes",[]) if isinstance(n,Mapping) and n.get("processRef")==process_id]
+            candidate_starts=[n.get("id") for n in candidate_nodes if n.get("type")=="startEvent"]
+            candidate_ends=[n.get("id") for n in candidate_nodes if n.get("type")=="endEvent"]
+            valid=not ambiguous and cls._process_has_valid_boundaries(candidate,process_id)
+            if valid and changed:
+                workflow["nodes"]=candidate["nodes"];workflow["flows"]=candidate["flows"]
+                used.clear();used.update(candidate_used)
+            detail["starts_after"]=candidate_starts if valid else detail["starts_before"]
+            detail["ends_after"]=candidate_ends if valid else detail["ends_before"]
+            detail["status"]="repaired" if valid and changed else "valid" if valid else "ambiguous"
+            if not valid:detail["created_start"]=None;detail["created_end"]=None
+            report["process_boundary_report"].append(detail)
+
+    @staticmethod
+    def _process_has_valid_boundaries(workflow,process_id):
+        nodes=[n for n in workflow.get("nodes",[]) if isinstance(n,Mapping) and n.get("processRef")==process_id]
+        ids={n.get("id") for n in nodes};starts=[n.get("id") for n in nodes if n.get("type")=="startEvent"];ends={n.get("id") for n in nodes if n.get("type")=="endEvent"}
+        if not nodes or not starts or not ends:return False
+        def endpoints(flow):return flow.get("source",flow.get("sourceRef")),flow.get("target",flow.get("targetRef"))
+        flows=[f for f in workflow.get("flows",[]) if isinstance(f,Mapping) and f.get("processRef")==process_id
+               and endpoints(f)[0] in ids and endpoints(f)[1] in ids]
+        outgoing={identifier:[] for identifier in ids};incoming={identifier:[] for identifier in ids}
+        for flow in flows:
+            source,target=endpoints(flow);outgoing[source].append(target);incoming[target].append(source)
+        reachable=set();queue=list(starts)
+        while queue:
+            current=queue.pop(0)
+            if current in reachable:continue
+            reachable.add(current);queue.extend(outgoing.get(current,[]))
+        to_end=set();queue=list(ends)
+        while queue:
+            current=queue.pop(0)
+            if current in to_end:continue
+            to_end.add(current);queue.extend(incoming.get(current,[]))
+        business={n.get("id") for n in nodes if n.get("type") not in {"startEvent","endEvent"}}
+        return business<=reachable and business<=to_end and bool(reachable&ends)
 
     @classmethod
     def _ensure_required_lanes(cls, workflow, requirements, report):
