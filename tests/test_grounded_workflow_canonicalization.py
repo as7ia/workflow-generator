@@ -288,3 +288,64 @@ def test_grounded_decision_branch_may_loop_to_the_check_activity():
         decisions=[{"name":"Check request","outcomes":["Continue","Check request"]}]))
     gateway=next(n for n in fixed["nodes"] if n["type"]=="exclusiveGateway")
     assert any(f["source"]==gateway["id"] and f["target"]=="check" for f in fixed["flows"])
+
+def test_existing_endpoints_reuse_does_not_require_unique_boundary_or_rewire_flows():
+    value=workflow();value["processes"].append({"id":"p_b","name":"B","description":"","executable":False,"properties":{}})
+    value["participants"].append({"id":"p_b_owner","name":"B","processRef":"p_b","properties":{}})
+    value["nodes"] += [
+        {"id":"b_start","type":"startEvent","name":"Start","processRef":"p_b","participantRef":"p_b_owner","laneRef":None,"actor":None,"properties":{}},
+        {"id":"b_start_alt","type":"startEvent","name":"Alternative start","processRef":"p_b","participantRef":"p_b_owner","laneRef":None,"actor":None,"properties":{}},
+        {"id":"b_receive","type":"receiveTask","name":"A submits request","processRef":"p_b","participantRef":"p_b_owner","laneRef":None,"actor":None,"properties":{}},
+        {"id":"b_work","type":"serviceTask","name":"Work","processRef":"p_b","participantRef":"p_b_owner","laneRef":None,"actor":None,"properties":{}},
+        {"id":"b_send","type":"sendTask","name":"Notify A","processRef":"p_b","participantRef":"p_b_owner","laneRef":None,"actor":None,"properties":{}},
+        {"id":"b_end","type":"endEvent","name":"End","processRef":"p_b","participantRef":"p_b_owner","laneRef":None,"actor":None,"properties":{}},
+        {"id":"b_end_alt","type":"endEvent","name":"Alternative end","processRef":"p_b","participantRef":"p_b_owner","laneRef":None,"actor":None,"properties":{}},
+    ]
+    value["flows"] += [
+        {"id":"bf1","source":"b_start","target":"b_receive","processRef":"p_b","condition":None,"isDefault":False,"properties":{}},
+        {"id":"bf2","source":"b_receive","target":"b_work","processRef":"p_b","condition":None,"isDefault":False,"properties":{}},
+        {"id":"bf3","source":"b_work","target":"b_send","processRef":"p_b","condition":None,"isDefault":False,"properties":{}},
+        {"id":"bf4","source":"b_send","target":"b_end","processRef":"p_b","condition":None,"isDefault":False,"properties":{}},
+        {"id":"bf5","source":"b_start_alt","target":"b_end_alt","processRef":"p_b","condition":None,"isDefault":False,"properties":{}},
+    ]
+    before=[dict(flow) for flow in value["flows"] if flow["processRef"]=="p_b"]
+    fixed,report=GroundedWorkflowCanonicalizer.canonicalize(value,requirements(
+        participants=[{"name":"A"},{"name":"B"}],interactions=[{"source":"A","target":"B"},{"source":"B","target":"A"}]))
+    assert [flow for flow in fixed["flows"] if flow["processRef"]=="p_b"]==before
+    assert {(m["source"],m["target"]) for m in fixed["messageFlows"]}>={(next(m["source"] for m in fixed["messageFlows"] if m["target"]=="b_receive"),"b_receive"),("b_send",next(m["target"] for m in fixed["messageFlows"] if m["source"]=="b_send"))}
+    reused={item["id"] for item in report["interaction_endpoint_reuse"]}
+    assert {"b_receive","b_send"}<=reused
+    details=[candidate for group in report["interaction_endpoint_candidates"] for candidate in group["candidates"] if candidate["node_id"] in reused]
+    assert all(item["candidate_mode"]=="reuse" and item["topology_valid"] and item["topology_reason"]=="existing node already connected" for item in details)
+
+def test_decision_activity_scoring_selects_unique_best_candidate():
+    value=workflow();value["nodes"]=[value["nodes"][0],
+        {"id":"best","type":"serviceTask","name":"Verify application","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}},
+        {"id":"medium","type":"serviceTask","name":"Verify record","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}},
+        value["nodes"][-1]]
+    value["flows"]=[
+        {"id":"s1","source":"a_start","target":"medium","processRef":"process_a","condition":None,"isDefault":False,"properties":{}},
+        {"id":"s2","source":"medium","target":"best","processRef":"process_a","condition":None,"isDefault":False,"properties":{}},
+        {"id":"s3","source":"best","target":"a_end","processRef":"process_a","condition":None,"isDefault":False,"properties":{}},
+    ]
+    fixed,report=GroundedWorkflowCanonicalizer.canonicalize(value,requirements(
+        decisions=[{"name":"Verify application","outcomes":["Accept","Reject"]}]))
+    diagnostic=report["decision_activity_candidates"][0]
+    assert diagnostic["selected"]=="best" and diagnostic["best_score"]>diagnostic["second_best_score"]
+    assert any(node["type"]=="exclusiveGateway" for node in fixed["nodes"])
+
+def test_equal_best_decision_activities_remain_ambiguous():
+    value=workflow();value["nodes"]=[value["nodes"][0],
+        {"id":"check_1","type":"serviceTask","name":"Verify application","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}},
+        {"id":"check_2","type":"serviceTask","name":"Verify application","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}},value["nodes"][-1]]
+    value["flows"]=[
+        {"id":"e1","source":"a_start","target":"check_1","processRef":"process_a","condition":None,"isDefault":False,"properties":{}},
+        {"id":"e2","source":"check_1","target":"check_2","processRef":"process_a","condition":None,"isDefault":False,"properties":{}},
+        {"id":"e3","source":"check_2","target":"a_end","processRef":"process_a","condition":None,"isDefault":False,"properties":{}},
+    ]
+    fixed,report=GroundedWorkflowCanonicalizer.canonicalize(value,requirements(
+        decisions=[{"name":"Verify application","outcomes":["Accept","Reject"]}]))
+    diagnostic=report["decision_activity_candidates"][0]
+    assert diagnostic["selected"] is None and diagnostic["best_score"]==diagnostic["second_best_score"]
+    assert diagnostic["reason"]=="equal best decision activities"
+    assert not any(node["type"]=="exclusiveGateway" for node in fixed["nodes"])

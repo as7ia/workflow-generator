@@ -30,6 +30,7 @@ class GroundedWorkflowCanonicalizer:
             "interaction_endpoint_candidates": [], "interaction_order": [],
             "self_loop_rejections": [], "rewiring_validation_failures": [],
             "decisions_materialized": [], "decision_materialization_diagnostics": [],
+            "decision_activity_candidates": [],
         }
         cls._ensure_participant_processes(value, requirements, report)
         cls._ensure_required_lanes(value, requirements, report)
@@ -54,12 +55,32 @@ class GroundedWorkflowCanonicalizer:
                 report["decision_materialization_diagnostics"].append({"decision":name,"status":"reused","gateway":existing[0].get("id")})
                 continue
             candidate=copy.deepcopy(workflow);nodes=candidate.get("nodes",[]);flows=candidate.get("flows",[])
-            tasks=[n for n in nodes if isinstance(n,Mapping) and n.get("type") in {"userTask","serviceTask","manualTask","scriptTask","businessRuleTask"}
-                   and (semantic_label_match(name,n.get("name")) or semantic_activity_match({"name":name},n))]
-            if len(tasks)!=1:
-                report["decision_materialization_diagnostics"].append({"decision":name,"status":"ambiguous","reason":"decision activity is not unique"})
+            task_types={"userTask","serviceTask","manualTask","scriptTask","businessRuleTask"}
+            ranked=[];candidate_details=[];decision_tokens=normalize_semantic_tokens(name)
+            for node in nodes:
+                if not isinstance(node,Mapping) or node.get("type") not in task_types:continue
+                node_tokens=normalize_semantic_tokens(node.get("name"));label_match=semantic_label_match(name,node.get("name"));activity_match=semantic_activity_match({"name":name},node)
+                overlap=len(decision_tokens&node_tokens)/len(decision_tokens|node_tokens) if decision_tokens and node_tokens else 0
+                outgoing_count=sum(isinstance(flow,Mapping) and flow.get("source")==node.get("id") for flow in flows)
+                participant_match=not decision.get("participantRef") or node.get("participantRef")==decision.get("participantRef")
+                decision_actions={"verify","check","evaluate","validate","accept","reject"}
+                object_match=bool((decision_tokens-decision_actions)&(node_tokens-decision_actions))
+                score=(60 if label_match else 0)+(40 if activity_match else 0)+round(overlap*30)+(10 if outgoing_count==1 else 5 if outgoing_count else 0)+(10 if participant_match and decision.get("participantRef") else 0)
+                detail={"node_id":node.get("id"),"score":score,"semantic_match":label_match or activity_match,
+                        "participant_match":participant_match,"object_match":object_match}
+                candidate_details.append(detail)
+                if participant_match and score>0:ranked.append((score,str(node.get("id")),node))
+            ranked.sort(key=lambda item:(-item[0],item[1]));best=ranked[0][0] if ranked else None;second=ranked[1][0] if len(ranked)>1 else None
+            threshold=30;margin=(best-second) if best is not None and second is not None else best
+            task=ranked[0][2] if ranked and best>threshold and (second is None or margin>0) else None
+            selection_reason="unique best decision activity" if task is not None else "equal best decision activities" if ranked and second==best else "no decision activity above threshold"
+            report["decision_activity_candidates"].append({"decision":name,"candidates":candidate_details,
+                "best_score":best,"second_best_score":second,"selection_threshold":threshold,
+                "selection_margin":margin,"selected":task.get("id") if task else None,"reason":selection_reason})
+            if task is None:
+                report["decision_materialization_diagnostics"].append({"decision":name,"status":"ambiguous","reason":selection_reason})
                 continue
-            task=tasks[0];process_id=task.get("processRef");outgoing=[f for f in flows if isinstance(f,dict) and f.get("processRef")==process_id and f.get("source")==task.get("id")]
+            process_id=task.get("processRef");outgoing=[f for f in flows if isinstance(f,dict) and f.get("processRef")==process_id and f.get("source")==task.get("id")]
             if len(outgoing)!=1:
                 report["decision_materialization_diagnostics"].append({"decision":name,"status":"ambiguous","reason":"decision activity has no unique continuation"})
                 continue
@@ -331,6 +352,7 @@ class GroundedWorkflowCanonicalizer:
         ranked=[];details=[]
         for node in nodes:
             if not isinstance(node,dict) or node.get("processRef")!=process_id or node.get("id") in used_endpoints:continue
+            if node.get("participantRef")!=participant.get("id"):continue
             node_tokens=normalize_semantic_tokens(node.get("name"));kind=node.get("type");score=0
             if kind==node_type:score+=50
             if role=="source" and kind=="receiveTask":continue
@@ -339,10 +361,13 @@ class GroundedWorkflowCanonicalizer:
             if directional:score+=20
             if counterpart and counterpart&node_tokens:score+=20
             if semantic_label_match(f"{'send' if role=='source' else 'receive'} {counterpart_name}",node.get("name")):score+=10
-            if cls._valid_existing_endpoint(nodes,flows,node,process_id):score+=5
+            topology_valid,topology_reason=cls._valid_existing_endpoint(nodes,flows,node,process_id)
+            if topology_valid:score+=5
             compatible=score>=50 or directional
-            details.append({"node_id":node.get("id"),"type":kind,"semantic_match":compatible,"score":score})
-            if compatible and cls._valid_existing_endpoint(nodes,flows,node,process_id):ranked.append((score,str(node.get("id")),node))
+            details.append({"node_id":node.get("id"),"type":kind,"candidate_mode":"reuse",
+                            "semantic_match":compatible,"score":score,"topology_valid":topology_valid,
+                            "topology_reason":topology_reason})
+            if compatible and topology_valid:ranked.append((score,str(node.get("id")),node))
         ranked.sort(key=lambda item:(-item[0],item[1]))
         threshold=20;best_score=ranked[0][0] if ranked else None;second_score=ranked[1][0] if len(ranked)>1 else None
         margin=(best_score-second_score) if best_score is not None and second_score is not None else best_score
@@ -359,9 +384,30 @@ class GroundedWorkflowCanonicalizer:
 
     @staticmethod
     def _valid_existing_endpoint(nodes,flows,node,process_id):
-        return (node.get("type") in {"sendTask","receiveTask","userTask","serviceTask","manualTask","scriptTask","businessRuleTask"}
-                and GroundedWorkflowCanonicalizer._valid_local_topology(
-                    {"nodes":nodes,"flows":flows},process_id,node.get("id")))
+        if node.get("type") not in {"sendTask","receiveTask","userTask","serviceTask","manualTask","scriptTask","businessRuleTask"}:
+            return False,"node type is not reusable"
+        local={n.get("id"):n for n in nodes if isinstance(n,Mapping) and n.get("processRef")==process_id}
+        local_flows=[f for f in flows if isinstance(f,Mapping) and f.get("source") in local and f.get("target") in local]
+        incoming={node_id:[] for node_id in local};outgoing={node_id:[] for node_id in local}
+        for flow in local_flows:
+            incoming[flow.get("target")].append(flow.get("source"));outgoing[flow.get("source")].append(flow.get("target"))
+        node_id=node.get("id")
+        if not incoming.get(node_id) or not outgoing.get(node_id):return False,"existing node is not connected on both sides"
+        starts=[identifier for identifier,value in local.items() if value.get("type")=="startEvent"]
+        ends={identifier for identifier,value in local.items() if value.get("type")=="endEvent"}
+        reachable=set();queue=list(starts)
+        while queue:
+            current=queue.pop(0)
+            if current in reachable:continue
+            reachable.add(current);queue.extend(outgoing.get(current,[]))
+        to_end=set();queue=list(ends)
+        while queue:
+            current=queue.pop(0)
+            if current in to_end:continue
+            to_end.add(current);queue.extend(incoming.get(current,[]))
+        if node_id not in reachable:return False,"existing node is not reachable from a start event"
+        if node_id not in to_end:return False,"existing node has no path to an end event"
+        return True,"existing node already connected"
 
     @staticmethod
     def _has_message_between(messages,nodes,source_participant_id,target_participant_id):
