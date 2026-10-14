@@ -80,6 +80,7 @@ def _normalize_semantic_requirements(raw,description=None):
                         if _norm(x.get("name")) and _norm(x.get("name")) not in timer_activities
                         and (not isinstance(description,str) or not _activity_is_passive_only(description,x.get("name")))],
                        lambda x:_norm(x.get("name")))
+    activities=_prefer_complete_activities(activities)
     result={"participants":participants,"lanes":lanes,"timers":_dedupe(timers,lambda x:(x.get("kind"),x.get("value"),_norm(x.get("activity")))),
             "parallelisms":parallelisms,"decisions":_dedupe(decisions,lambda x:(_norm(x["name"]),tuple(_norm(v.get("name")) if isinstance(v,Mapping) else _norm(v) for v in x["outcomes"]))),
             "interactions":interactions,"activities":activities,"ambiguities":_dedupe(ambiguities,lambda x:_norm(x.get("message") or x.get("name") or x.get("requirement")))}
@@ -226,6 +227,15 @@ def _dedupe(items,key):
         marker=key(item)
         if marker and marker not in seen:seen.add(marker);result.append(item)
     return result
+def _prefer_complete_activities(activities):
+    """Drop only lexical fragments subsumed by a more complete activity."""
+    tokenized=[]
+    for item in activities:
+        from .coverage_validator import normalize_semantic_tokens
+        tokenized.append((item,normalize_semantic_tokens(item.get("name"))))
+    return [item for item,tokens in tokenized if not any(
+        tokens and len(tokens)==1 and tokens<other_tokens
+        for other,other_tokens in tokenized if other is not item)]
 def _norm(value):
     tokens=re.findall(r"[a-z0-9]+",unicodedata.normalize("NFKD",str(value or "")).encode("ascii","ignore").decode().lower())
     return " ".join(token[:-1] if len(token)>4 and token.endswith(("s","r")) else token for token in tokens)

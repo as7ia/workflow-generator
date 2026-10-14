@@ -230,7 +230,7 @@ class WorkflowCompiler:
 
         result["pipeline_debug"]["after_structural_repair"] = self._workflow_counts(current_workflow)
         result["pipeline_debug"]["before_coverage_validation"] = self._workflow_counts(current_workflow)
-        result["coverage_errors"]=CoverageValidator().validate(requirements,current_workflow)
+        result["coverage_errors"],result["pipeline_debug"]["coverage_matching_report"]=CoverageValidator().validate_with_report(requirements,current_workflow)
         blocking=self._blocking_errors(result["coverage_errors"])
         if blocking:
             try:
@@ -264,7 +264,7 @@ class WorkflowCompiler:
                 current_workflow=copy.deepcopy(prepared["workflow"])
                 result["normalized_workflow"]=copy.deepcopy(current_workflow)
                 result["schema_errors"]=prepared["schema_errors"];result["semantic_errors"]=prepared["semantic_errors"]
-                result["coverage_errors"]=CoverageValidator().validate(requirements,current_workflow)
+                result["coverage_errors"],result["pipeline_debug"]["coverage_matching_report"]=CoverageValidator().validate_with_report(requirements,current_workflow)
                 blocking=self._blocking_errors(result["schema_errors"],result["semantic_errors"],result["coverage_errors"])
             except Exception as exc:
                 result["normalized_workflow"]=copy.deepcopy(current_workflow)
@@ -391,6 +391,7 @@ class WorkflowCompiler:
                 "canonicalization_report": None,
                 "pre_canonical_entities": None,
                 "post_canonical_entities": None,
+                "coverage_matching_report": None,
             },
         }
 

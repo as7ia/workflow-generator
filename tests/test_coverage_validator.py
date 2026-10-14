@@ -1,4 +1,4 @@
-from src.workflow.coverage_validator import CoverageValidator,normalize_semantic_label,normalize_semantic_tokens,semantic_label_match
+from src.workflow.coverage_validator import CoverageValidator,normalize_semantic_label,normalize_semantic_tokens,semantic_activity_match,semantic_label_match
 from src.workflow.semantic_requirements import normalize_semantic_requirements
 
 def node(i,name,t="serviceTask",participant=None,properties=None):
@@ -217,3 +217,31 @@ def test_synthetic_terminal_label_does_not_cover_unrelated_activity():
 def test_normal_task_still_covers_an_activity():
     w=workflow();w["nodes"].append(node("validate_task","Validate Request","serviceTask","pa"))
     assert "MISSING_ACTIVITY" not in codes(requirements(activities=[{"name":"Verification de la demande"}]),w)
+
+def test_activity_matching_is_bilingual_and_keeps_action_distinctions():
+    pairs=[
+        ("Vérifier document","Check document"),("Approve request","Approuver demande"),
+        ("Transmettre document","Forward document"),("Informer client","Notify customer"),
+        ("Recevoir document","Receive document"),("Attendre réponse","Wait response"),
+    ]
+    for expected,actual in pairs:
+        assert semantic_activity_match(expected,node("candidate",actual))
+        assert semantic_activity_match(actual,node("candidate",expected))
+    assert not semantic_activity_match("Vérifier document",node("candidate","Approve document"))
+
+def test_wait_activity_can_be_covered_by_a_timer_event():
+    timer=node("wait","Two days","intermediateCatchEvent","pa",{"timer":{"kind":"duration","value":"P2D"}})
+    assert semantic_activity_match("Attendre deux jours",timer)
+
+def test_coverage_matching_report_explains_activity_and_missing_interaction():
+    req=requirements(activities=[{"name":"Review request"}],interactions=[{"source":"Actor B","target":"Actor A"}])
+    issues,report=CoverageValidator().validate_with_report(req,workflow())
+    activity=next(item for item in report if item["type"]=="activity")
+    interaction=next(item for item in report if item["type"]=="interaction")
+    assert activity["covered"] is True and activity["score"]==1
+    assert interaction["covered"] is False and interaction["selected"] is None
+    assert "MISSING_INTERACTION" in {issue["code"] for issue in issues}
+
+def test_activity_normalization_prefers_complete_requirement_over_fragments():
+    normalized,_=normalize_semantic_requirements({"activities":["approve request","approve","request"]})
+    assert normalized["activities"]==[{"name":"approve request"}]

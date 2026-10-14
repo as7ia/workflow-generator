@@ -1,7 +1,7 @@
 from src.workflow.canonicalization import GroundedWorkflowCanonicalizer
 from src.workflow.semantic_requirements import normalize_semantic_requirements
 from src.workflow.semantic_validator import SemanticValidator
-from src.workflow.coverage_validator import normalize_semantic_tokens, semantic_label_match
+from src.workflow.coverage_validator import CoverageValidator,normalize_semantic_tokens, semantic_label_match
 
 
 def workflow():
@@ -245,3 +245,46 @@ def test_local_self_message_is_rejected_instead_of_becoming_sequence_self_loop()
     assert not any(flow["source"]==flow["target"] for flow in fixed["flows"])
     assert not any(message["source"]==message["target"] for message in fixed["messageFlows"])
     assert report["self_loop_rejections"]==[{"flow_id":"self","source":"a_start","target":"a_start"}]
+
+def test_unique_highest_endpoint_score_is_selected_and_explained():
+    value=workflow();value["nodes"].insert(1,{"id":"notify_b","type":"sendTask","name":"Notify B","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}})
+    value["flows"]=[
+        {"id":"x1","source":"a_start","target":"notify_b","processRef":"process_a","condition":None,"isDefault":False,"properties":{}},
+        {"id":"x2","source":"notify_b","target":"a_end","processRef":"process_a","condition":None,"isDefault":False,"properties":{}},
+    ]
+    fixed,report=GroundedWorkflowCanonicalizer.canonicalize(value,requirements(
+        participants=[{"name":"A"},{"name":"B"}],interactions=[{"source":"A","target":"B"}]))
+    source_report=next(item for item in report["interaction_endpoint_candidates"] if item["role"]=="source")
+    assert source_report["selected"]=="notify_b"
+    assert source_report["best_score"]>=source_report["selection_threshold"]
+    assert source_report["selection_reason"]=="unique best compatible endpoint"
+    assert fixed["messageFlows"][0]["source"]=="notify_b"
+
+def test_simple_grounded_decision_is_materialized_with_conditioned_branches():
+    value=workflow();value["nodes"].insert(1,{"id":"check","type":"serviceTask","name":"Check request","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}})
+    value["nodes"].insert(2,{"id":"continue","type":"serviceTask","name":"Continue","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}})
+    value["flows"]=[
+        {"id":"d1","source":"a_start","target":"check","processRef":"process_a","condition":None,"isDefault":False,"properties":{}},
+        {"id":"d2","source":"check","target":"continue","processRef":"process_a","condition":None,"isDefault":False,"properties":{}},
+        {"id":"d3","source":"continue","target":"a_end","processRef":"process_a","condition":None,"isDefault":False,"properties":{}},
+    ]
+    req=requirements(decisions=[{"name":"Check request","outcomes":["Continue","Correct"]}])
+    fixed,report=GroundedWorkflowCanonicalizer.canonicalize(value,req)
+    gateway=next(n for n in fixed["nodes"] if n["type"]=="exclusiveGateway")
+    branches=[f for f in fixed["flows"] if f["source"]==gateway["id"]]
+    assert {flow["condition"] for flow in branches}=={"Continue","Correct"}
+    assert report["decisions_materialized"][0]["gateway"]==gateway["id"]
+    assert "MISSING_DECISION" not in {issue["code"] for issue in CoverageValidator().validate(req,fixed)}
+
+def test_grounded_decision_branch_may_loop_to_the_check_activity():
+    value=workflow();value["nodes"].insert(1,{"id":"check","type":"serviceTask","name":"Check request","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}})
+    value["nodes"].insert(2,{"id":"continue","type":"serviceTask","name":"Continue","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}})
+    value["flows"]=[
+        {"id":"l1","source":"a_start","target":"check","processRef":"process_a","condition":None,"isDefault":False,"properties":{}},
+        {"id":"l2","source":"check","target":"continue","processRef":"process_a","condition":None,"isDefault":False,"properties":{}},
+        {"id":"l3","source":"continue","target":"a_end","processRef":"process_a","condition":None,"isDefault":False,"properties":{}},
+    ]
+    fixed,_=GroundedWorkflowCanonicalizer.canonicalize(value,requirements(
+        decisions=[{"name":"Check request","outcomes":["Continue","Check request"]}]))
+    gateway=next(n for n in fixed["nodes"] if n["type"]=="exclusiveGateway")
+    assert any(f["source"]==gateway["id"] and f["target"]=="check" for f in fixed["flows"])

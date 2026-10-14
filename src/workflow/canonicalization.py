@@ -7,7 +7,7 @@ import unicodedata
 from collections.abc import Mapping
 from typing import Any
 
-from .coverage_validator import normalize_semantic_tokens, semantic_label_match
+from .coverage_validator import normalize_semantic_tokens, semantic_activity_match, semantic_label_match
 
 
 class GroundedWorkflowCanonicalizer:
@@ -29,13 +29,60 @@ class GroundedWorkflowCanonicalizer:
             "interaction_endpoint_rollbacks": [],
             "interaction_endpoint_candidates": [], "interaction_order": [],
             "self_loop_rejections": [], "rewiring_validation_failures": [],
+            "decisions_materialized": [], "decision_materialization_diagnostics": [],
         }
         cls._ensure_participant_processes(value, requirements, report)
         cls._ensure_required_lanes(value, requirements, report)
         cls._normalize_timer_nodes(value, requirements, report)
+        cls._materialize_decisions(value,requirements,report)
         cls._reclassify_local_messages(value, requirements, report)
         cls._ensure_interactions(value, requirements, report)
         return value, report
+
+    @classmethod
+    def _materialize_decisions(cls,workflow,requirements,report):
+        decisions=requirements.get("decisions",[]) if isinstance(requirements,Mapping) else []
+        if not isinstance(decisions,list):return
+        for decision in decisions:
+            if not isinstance(decision,Mapping):continue
+            name=decision.get("name");raw_outcomes=decision.get("outcomes",[])
+            outcomes=[value.get("name") if isinstance(value,Mapping) else value for value in raw_outcomes]
+            outcomes=[str(value).strip() for value in outcomes if str(value or "").strip()]
+            if not isinstance(name,str) or len(outcomes)<2:continue
+            existing=[n for n in workflow.get("nodes",[]) if isinstance(n,Mapping) and n.get("type") in {"exclusiveGateway","inclusiveGateway"} and semantic_label_match(name,n.get("name"))]
+            if existing:
+                report["decision_materialization_diagnostics"].append({"decision":name,"status":"reused","gateway":existing[0].get("id")})
+                continue
+            candidate=copy.deepcopy(workflow);nodes=candidate.get("nodes",[]);flows=candidate.get("flows",[])
+            tasks=[n for n in nodes if isinstance(n,Mapping) and n.get("type") in {"userTask","serviceTask","manualTask","scriptTask","businessRuleTask"}
+                   and (semantic_label_match(name,n.get("name")) or semantic_activity_match({"name":name},n))]
+            if len(tasks)!=1:
+                report["decision_materialization_diagnostics"].append({"decision":name,"status":"ambiguous","reason":"decision activity is not unique"})
+                continue
+            task=tasks[0];process_id=task.get("processRef");outgoing=[f for f in flows if isinstance(f,dict) and f.get("processRef")==process_id and f.get("source")==task.get("id")]
+            if len(outgoing)!=1:
+                report["decision_materialization_diagnostics"].append({"decision":name,"status":"ambiguous","reason":"decision activity has no unique continuation"})
+                continue
+            used=cls._all_ids(candidate);direct=outgoing[0];continuation=direct.get("target")
+            gateway=cls._add_node(nodes,used,f"gateway_{cls._slug(name)}","exclusiveGateway",name,process_id,task.get("participantRef"))
+            direct["target"]=gateway["id"]
+            targets=[];created=[];failed=False
+            for outcome in outcomes:
+                matches=[n for n in nodes if isinstance(n,Mapping) and n.get("processRef")==process_id and n.get("id")!=gateway["id"] and semantic_label_match(outcome,n.get("name"))]
+                if len(matches)>1:failed=True;break
+                if matches:target=matches[0]
+                else:
+                    target=cls._add_node(nodes,used,f"outcome_{cls._slug(outcome)}","serviceTask",outcome,process_id,task.get("participantRef"));created.append(target)
+                    cls._add_flow(flows,used,target["id"],continuation,process_id)
+                if target["id"] in targets:failed=True;break
+                targets.append(target["id"])
+                branch=cls._add_flow(flows,used,gateway["id"],target["id"],process_id,outcome)
+                if branch is not None:branch["condition"]=outcome
+            if failed or not cls._valid_local_topology(candidate,process_id,gateway["id"]):
+                report["decision_materialization_diagnostics"].append({"decision":name,"status":"rollback","reason":"branch topology is ambiguous or invalid"})
+                continue
+            workflow["nodes"]=nodes;workflow["flows"]=flows
+            report["decisions_materialized"].append({"decision":name,"gateway":gateway["id"],"outcomes":outcomes,"created_nodes":[n["id"] for n in created]})
 
     @classmethod
     def _ensure_participant_processes(cls, workflow, requirements, report):
@@ -296,10 +343,18 @@ class GroundedWorkflowCanonicalizer:
             compatible=score>=50 or directional
             details.append({"node_id":node.get("id"),"type":kind,"semantic_match":compatible,"score":score})
             if compatible and cls._valid_existing_endpoint(nodes,flows,node,process_id):ranked.append((score,str(node.get("id")),node))
-        ranked.sort(key=lambda item:(-item[0],item[1]));selected=ranked[0][2] if ranked and (len(ranked)==1 or ranked[0][0]>ranked[1][0]) else None
+        ranked.sort(key=lambda item:(-item[0],item[1]))
+        threshold=20;best_score=ranked[0][0] if ranked else None;second_score=ranked[1][0] if len(ranked)>1 else None
+        margin=(best_score-second_score) if best_score is not None and second_score is not None else best_score
+        selected=ranked[0][2] if ranked and best_score>=threshold and (second_score is None or margin>0) else None
+        reason=("unique best compatible endpoint" if selected is not None else
+                "no topologically valid compatible endpoint" if not ranked else
+                "best score below selection threshold" if best_score<threshold else "ambiguous equal best endpoints")
         report["interaction_endpoint_candidates"].append({"interaction_index":interaction_index,
             "participant":participant.get("id"),"role":role,"candidates":details,
-            "selected":selected.get("id") if selected else None})
+            "best_score":best_score,"second_best_score":second_score,"selection_threshold":threshold,
+            "selection_margin":margin,"selected":selected.get("id") if selected else None,
+            "selection_reason":reason})
         return selected
 
     @staticmethod
