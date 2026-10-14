@@ -1,4 +1,4 @@
-from src.workflow.coverage_validator import CoverageValidator,normalize_semantic_label,normalize_semantic_tokens,semantic_activity_match,semantic_label_match
+from src.workflow.coverage_validator import CoverageValidator,normalize_semantic_label,normalize_semantic_tokens,semantic_activity_match,semantic_activity_score,semantic_label_match
 from src.workflow.semantic_requirements import normalize_semantic_requirements
 
 def node(i,name,t="serviceTask",participant=None,properties=None):
@@ -248,9 +248,9 @@ def test_activity_normalization_prefers_complete_requirement_over_fragments():
 
 def test_realistic_bilingual_paraphrases_are_covered_with_selected_evidence():
     cases=[
-        ("Vérification du dossier","Check Order Completeness"),
+        ("Vérification du dossier","Check Document Completeness"),
         ("Approuver la commande","Approve Order"),
-        ("Transmettre le dossier","Forward to Finance"),
+        ("Transmettre le dossier","Forward Document to Finance"),
     ]
     for requirement_name,node_name in cases:
         w=workflow();w["nodes"]=[node("candidate",node_name,"serviceTask","pa")]
@@ -264,4 +264,26 @@ def test_realistic_bilingual_paraphrases_are_covered_with_selected_evidence():
 def test_activity_deduplication_collapses_lexical_paraphrase_not_repetition():
     normalized,_=normalize_semantic_requirements({"activities":[
         "Envoyer le dossier de commande","envoie dossier","Transmettre le dossier","transmet dossier"]})
-    assert normalized["activities"]==[{"name":"Envoyer le dossier de commande"}]
+    assert normalized["activities"]==[
+        {"name":"Envoyer le dossier de commande"},{"name":"Transmettre le dossier"}]
+
+
+def test_structured_activity_matching_keeps_action_object_and_target_roles_distinct():
+    assert semantic_activity_match("verify document",node("same_object","check document"))
+    assert not semantic_activity_match("verify document",node("other_object","check payment"))
+    assert not semantic_activity_match("send document to B",node("notification","notify B"))
+    assert not semantic_activity_match("forward document to B",node("submission","send document to B"))
+
+
+def test_activity_matching_report_uses_tristate_participant_and_object_evidence():
+    w=workflow();w["nodes"]=[node("right","Check document","serviceTask","pa"),node("wrong","Check document","serviceTask","pb")]
+    req=requirements(activities=[{"name":"Verify document","participant":"Actor A"}])
+    _,report=CoverageValidator().validate_with_report(req,w)
+    activity=next(item for item in report if item["type"]=="activity")
+    scores={item["node_id"]:item for item in activity["candidate_scores"]}
+    assert scores["right"]["participant_match"] is True
+    assert scores["wrong"]["participant_match"] is False
+    assert scores["right"]["object_match"] is True
+    assert scores["right"]["semantic_analysis"]["requirement"]["action_family"]=="verify"
+    score=semantic_activity_score("verify",node("candidate","check"))
+    assert score["object_match"] is None

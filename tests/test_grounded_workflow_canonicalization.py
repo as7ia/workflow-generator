@@ -386,3 +386,56 @@ def test_decision_scoring_uses_grounded_lane_and_business_object():
     assert by_node["check_document"]["participant_match"] is True and by_node["check_document"]["object_match"] is True
     assert by_node["check_payment"]["participant_match"] is False and by_node["check_payment"]["object_match"] is False
     assert by_node["check_document"]["score"]>by_node["check_payment"]["score"]
+
+
+def test_decision_scoring_blocks_incompatible_actions_and_objects():
+    value=workflow();value["nodes"]=[value["nodes"][0],
+        {"id":"request_document","type":"serviceTask","name":"Request Document","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}},
+        {"id":"verify_payment","type":"serviceTask","name":"Verify Payment","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}},
+        {"id":"verify_document","type":"serviceTask","name":"Verify Document","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}},value["nodes"][-1]]
+    value["flows"]=[
+        {"id":"d1","source":"a_start","target":"request_document","processRef":"process_a","condition":None,"isDefault":False,"properties":{}},
+        {"id":"d2","source":"request_document","target":"verify_payment","processRef":"process_a","condition":None,"isDefault":False,"properties":{}},
+        {"id":"d3","source":"verify_payment","target":"verify_document","processRef":"process_a","condition":None,"isDefault":False,"properties":{}},
+        {"id":"d4","source":"verify_document","target":"a_end","processRef":"process_a","condition":None,"isDefault":False,"properties":{}},
+    ]
+    _,report=GroundedWorkflowCanonicalizer.canonicalize(value,requirements(
+        decisions=[{"name":"Verify Document","outcomes":["Valid","Invalid"]}]))
+    diagnostic=report["decision_activity_candidates"][0];by_node={item["node_id"]:item for item in diagnostic["candidates"]}
+    assert diagnostic["selected"]=="verify_document"
+    assert by_node["request_document"]["action_match"] is False
+    assert by_node["verify_payment"]["object_match"] is False
+    assert by_node["verify_document"]["semantic_analysis"]["requirement"]["objects"]==["document"]
+
+
+def test_boundary_interaction_endpoints_are_reachable_with_canonical_or_reference_fields():
+    nodes=[
+        {"id":"start","type":"startEvent","processRef":"p"},
+        {"id":"receive","type":"receiveTask","processRef":"p"},
+        {"id":"work","type":"serviceTask","processRef":"p"},
+        {"id":"send","type":"sendTask","processRef":"p"},
+        {"id":"end","type":"endEvent","processRef":"p"},
+    ]
+    flows=[{"source":"start","target":"receive"},{"sourceRef":"receive","targetRef":"work"},
+           {"source":"work","target":"send"},{"source":"send","target":"end"}]
+    assert GroundedWorkflowCanonicalizer._valid_existing_endpoint(nodes,flows,nodes[1],"p")==(
+        True,"existing node already connected")
+    assert GroundedWorkflowCanonicalizer._valid_existing_endpoint(nodes,flows,nodes[3],"p")==(
+        True,"existing node already connected")
+
+
+def test_decision_scoring_distinguishes_initial_check_from_explicit_recheck():
+    value=workflow();value["nodes"]=[value["nodes"][0],
+        {"id":"initial","type":"serviceTask","name":"Verify Document","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}},
+        {"id":"repeat","type":"serviceTask","name":"Verify Document Again","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}},value["nodes"][-1]]
+    value["flows"]=[
+        {"id":"r1","source":"a_start","target":"initial","processRef":"process_a","condition":None,"isDefault":False,"properties":{}},
+        {"id":"r2","source":"initial","target":"repeat","processRef":"process_a","condition":None,"isDefault":False,"properties":{}},
+        {"id":"r3","source":"repeat","target":"a_end","processRef":"process_a","condition":None,"isDefault":False,"properties":{}},
+    ]
+    _,first_report=GroundedWorkflowCanonicalizer.canonicalize(value,requirements(
+        decisions=[{"name":"Verify Document","outcomes":["Valid","Invalid"]}]))
+    _,repeat_report=GroundedWorkflowCanonicalizer.canonicalize(value,requirements(
+        decisions=[{"name":"Verify Document Again","outcomes":["Valid","Invalid"]}]))
+    assert first_report["decision_activity_candidates"][0]["selected"]=="initial"
+    assert repeat_report["decision_activity_candidates"][0]["selected"]=="repeat"

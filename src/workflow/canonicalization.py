@@ -7,7 +7,8 @@ import unicodedata
 from collections.abc import Mapping
 from typing import Any
 
-from .coverage_validator import activity_semantic_components,normalize_semantic_tokens, semantic_activity_match, semantic_label_match
+from .activity_semantics import analyze_activity_semantics, normalize_semantic_tokens, semantic_analysis_for_report
+from .coverage_validator import semantic_activity_score, semantic_label_match
 
 
 class GroundedWorkflowCanonicalizer:
@@ -65,23 +66,35 @@ class GroundedWorkflowCanonicalizer:
             expected_participants={p.get("id") for p in participants if any(label==p.get("id") or semantic_label_match(label,p.get("name")) for label in owner_labels)}
             expected_participants.update(lane.get("participantRef") for lane in lanes if any(label==lane.get("id") or semantic_label_match(label,lane.get("name")) for label in owner_labels))
             task_types={"userTask","serviceTask","manualTask","scriptTask","businessRuleTask"}
-            ranked=[];candidate_details=[];decision_tokens=normalize_semantic_tokens(name);decision_parts=activity_semantic_components(name)
+            ranked=[];diagnostic_ranked=[];candidate_details=[];decision_tokens=normalize_semantic_tokens(name);decision_parts=analyze_activity_semantics(name)
             for node in nodes:
                 if not isinstance(node,Mapping) or node.get("type") not in task_types:continue
-                node_tokens=normalize_semantic_tokens(node.get("name"));label_match=semantic_label_match(name,node.get("name"));activity_match=semantic_activity_match({"name":name},node)
+                node_tokens=normalize_semantic_tokens(node.get("name"));activity=semantic_activity_score({"name":name},node)
+                action_match=activity["action_match"]
                 overlap=len(decision_tokens&node_tokens)/len(decision_tokens|node_tokens) if decision_tokens and node_tokens else 0
                 outgoing_count=sum(isinstance(flow,Mapping) and flow.get("source")==node.get("id") for flow in flows)
                 participant_match=(node.get("participantRef") in expected_participants) if owner_labels else None
-                node_parts=activity_semantic_components(node);object_match=bool(decision_parts["objects"]&node_parts["objects"])
-                score=(60 if label_match else 0)+(40 if activity_match else 0)+round(overlap*20)+(30 if object_match else -15 if decision_parts["objects"] and node_parts["objects"] else 0)+(10 if outgoing_count==1 else 5 if outgoing_count else 0)+(20 if participant_match is True else -20 if participant_match is False else 0)
-                detail={"node_id":node.get("id"),"score":score,"semantic_match":label_match or activity_match,
-                        "participant_match":participant_match,"object_match":object_match}
+                node_parts=analyze_activity_semantics(node);object_match=activity["object_match"]
+                repetition_match=decision_parts["repetition_marker"]==node_parts["repetition_marker"]
+                score=((80 if action_match else -100)+(30 if object_match is True else -30 if object_match is False else 0)
+                       +round(overlap*20)+(10 if outgoing_count==1 else 5 if outgoing_count else 0)
+                       +(20 if participant_match is True else -20 if participant_match is False else 0)
+                       +(15 if repetition_match else -25))
+                detail={"node_id":node.get("id"),"score":score,"semantic_match":action_match and object_match is not False,
+                        "action_match":action_match,"participant_match":participant_match,"object_match":object_match,
+                        "repetition_match":repetition_match,
+                        "semantic_analysis":{"requirement":semantic_analysis_for_report(decision_parts),
+                                             "candidate":semantic_analysis_for_report(node_parts)}}
                 candidate_details.append(detail)
-                if participant_match is not False and score>0:ranked.append((score,str(node.get("id")),node))
-            ranked.sort(key=lambda item:(-item[0],item[1]));best=ranked[0][0] if ranked else None;second=ranked[1][0] if len(ranked)>1 else None
-            threshold=30;margin=(best-second) if best is not None and second is not None else best
-            task=ranked[0][2] if ranked and best>threshold and (second is None or margin>0) else None
-            selection_reason="unique best decision activity" if task is not None else "equal best decision activities" if ranked and second==best else "no decision activity above threshold"
+                if participant_match is not False and score>0:diagnostic_ranked.append((score,str(node.get("id")),node))
+                if action_match and object_match is not False and participant_match is not False and score>0:
+                    ranked.append((score,str(node.get("id")),node))
+            ranked.sort(key=lambda item:(-item[0],item[1]));diagnostic_ranked.sort(key=lambda item:(-item[0],item[1]))
+            best=ranked[0][0] if ranked else None;eligible_second=ranked[1][0] if len(ranked)>1 else None
+            second=next((item[0] for item in diagnostic_ranked if not ranked or item[2].get("id")!=ranked[0][2].get("id")),None)
+            threshold=30;margin=(best-eligible_second) if best is not None and eligible_second is not None else best
+            task=ranked[0][2] if ranked and best>threshold and (eligible_second is None or margin>0) else None
+            selection_reason="unique best decision activity" if task is not None else "equal best decision activities" if ranked and eligible_second==best else "no decision activity above threshold"
             report["decision_activity_candidates"].append({"decision":name,"candidates":candidate_details,
                 "best_score":best,"second_best_score":second,"selection_threshold":threshold,
                 "selection_margin":margin,"selected":task.get("id") if task else None,"reason":selection_reason})
@@ -372,12 +385,12 @@ class GroundedWorkflowCanonicalizer:
                           interaction_index,used_endpoints,report):
         process_id = participant.get("processRef")
         role="source" if node_type=="sendTask" else "target";counterpart=normalize_semantic_tokens(counterpart_name)
-        send_terms={"send","inform","notify","forward","submit"};receive_terms={"receive"}
+        send_terms={"send","notify","forward"};receive_terms={"receive"}
         ranked=[];details=[]
         for node in nodes:
             if not isinstance(node,dict) or node.get("processRef")!=process_id or node.get("id") in used_endpoints:continue
             if node.get("participantRef")!=participant.get("id"):continue
-            node_tokens=normalize_semantic_tokens(node.get("name"));kind=node.get("type");score=0
+            node_analysis=analyze_activity_semantics(node);node_tokens=node_analysis["tokens"];kind=node.get("type");score=0
             if kind==node_type:score+=50
             if role=="source" and kind=="receiveTask":continue
             if role=="target" and kind=="sendTask":continue
@@ -390,7 +403,8 @@ class GroundedWorkflowCanonicalizer:
             compatible=score>=50 or directional
             details.append({"node_id":node.get("id"),"type":kind,"candidate_mode":"reuse",
                             "semantic_match":compatible,"score":score,"topology_valid":topology_valid,
-                            "topology_reason":topology_reason})
+                            "topology_reason":topology_reason,
+                            "semantic_analysis":{"candidate":semantic_analysis_for_report(node_analysis)}})
             if compatible and topology_valid:ranked.append((score,str(node.get("id")),node))
         ranked.sort(key=lambda item:(-item[0],item[1]))
         threshold=20;best_score=ranked[0][0] if ranked else None;second_score=ranked[1][0] if len(ranked)>1 else None
@@ -411,12 +425,15 @@ class GroundedWorkflowCanonicalizer:
         if node.get("type") not in {"sendTask","receiveTask","userTask","serviceTask","manualTask","scriptTask","businessRuleTask"}:
             return False,"node type is not reusable"
         local={n.get("id"):n for n in nodes if isinstance(n,Mapping) and n.get("processRef")==process_id}
-        local_flows=[f for f in flows if isinstance(f,Mapping) and f.get("source") in local and f.get("target") in local]
+        def endpoints(flow):
+            return flow.get("source",flow.get("sourceRef")),flow.get("target",flow.get("targetRef"))
+        local_flows=[f for f in flows if isinstance(f,Mapping) and endpoints(f)[0] in local and endpoints(f)[1] in local]
         incoming={node_id:[] for node_id in local};outgoing={node_id:[] for node_id in local}
         for flow in local_flows:
-            incoming[flow.get("target")].append(flow.get("source"));outgoing[flow.get("source")].append(flow.get("target"))
+            source,target=endpoints(flow);incoming[target].append(source);outgoing[source].append(target)
         node_id=node.get("id")
-        if not incoming.get(node_id) or not outgoing.get(node_id):return False,"existing node is not connected on both sides"
+        if not incoming.get(node_id):return False,"existing endpoint has no local incoming sequenceFlow"
+        if not outgoing.get(node_id):return False,"existing endpoint has no local outgoing sequenceFlow"
         starts=[identifier for identifier,value in local.items() if value.get("type")=="startEvent"]
         ends={identifier for identifier,value in local.items() if value.get("type")=="endEvent"}
         reachable=set();queue=list(starts)
