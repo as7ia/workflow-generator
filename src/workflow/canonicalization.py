@@ -34,6 +34,8 @@ class GroundedWorkflowCanonicalizer:
             "decision_activity_candidates": [],
             "interactions_materialized": [], "interaction_messageflows_created": [],
             "interaction_messageflow_rollbacks": [],
+            "process_continuity_repairs": [], "premature_end_repairs": [],
+            "orphan_business_components": [], "artificial_cycles_rejected": [],
         }
         cls._ensure_participant_processes(value, requirements, report)
         cls._ensure_required_lanes(value, requirements, report)
@@ -41,6 +43,8 @@ class GroundedWorkflowCanonicalizer:
         cls._materialize_decisions(value,requirements,report)
         cls._reclassify_local_messages(value, requirements, report)
         cls._ensure_interactions(value, requirements, report)
+        cls._repair_artificial_two_node_cycles(value, requirements, report)
+        cls._ensure_local_process_continuity(value, report)
         return value, report
 
     @classmethod
@@ -347,6 +351,13 @@ class GroundedWorkflowCanonicalizer:
             else:
                 reuse={"id":source_node.get("id"),"role":"source"}
                 report["nodes_reused_for_interactions"].append(reuse);report["interaction_endpoint_reuse"].append(reuse)
+            if target_node is not None:
+                topology_valid,_=cls._valid_existing_endpoint(nodes,flows,target_node,target_participant.get("processRef"))
+                if not topology_valid:
+                    previous=last_endpoint.get(target_participant.get("id"))
+                    if not cls._connect_resume_endpoint(workflow,target_participant,target_node,previous,used,report):
+                        target_node=None
+                    nodes=workflow.get("nodes",[]);flows=workflow.get("flows",[]);messages=workflow.get("messageFlows",[])
             if target_node is None:
                 previous=last_endpoint.get(target_participant.get("id"))
                 target_node = cls.insert_node_into_process_sequence(
@@ -405,7 +416,10 @@ class GroundedWorkflowCanonicalizer:
                             "semantic_match":compatible,"score":score,"topology_valid":topology_valid,
                             "topology_reason":topology_reason,
                             "semantic_analysis":{"candidate":semantic_analysis_for_report(node_analysis)}})
-            if compatible and topology_valid:ranked.append((score,str(node.get("id")),node))
+            resume_eligible=(role=="target" and kind=="receiveTask"
+                             and cls._orphan_resume_endpoint(nodes,flows,node,process_id))
+            details[-1]["resume_eligible"]=resume_eligible
+            if compatible and (topology_valid or resume_eligible):ranked.append((score,str(node.get("id")),node))
         ranked.sort(key=lambda item:(-item[0],item[1]))
         threshold=20;best_score=ranked[0][0] if ranked else None;second_score=ranked[1][0] if len(ranked)>1 else None
         margin=(best_score-second_score) if best_score is not None and second_score is not None else best_score
@@ -419,6 +433,152 @@ class GroundedWorkflowCanonicalizer:
             "selection_margin":margin,"selected":selected.get("id") if selected else None,
             "selection_reason":reason})
         return selected
+
+    @staticmethod
+    def _orphan_resume_endpoint(nodes,flows,node,process_id):
+        local={n.get("id"):n for n in nodes if isinstance(n,Mapping) and n.get("processRef")==process_id}
+        node_id=node.get("id")
+        if node_id not in local:return False
+        local_flows=[f for f in flows if isinstance(f,Mapping) and f.get("source") in local and f.get("target") in local]
+        incoming={identifier:[] for identifier in local};outgoing={identifier:[] for identifier in local}
+        for flow in local_flows:
+            incoming[flow.get("target")].append(flow.get("source"));outgoing[flow.get("source")].append(flow.get("target"))
+        if incoming.get(node_id) or not outgoing.get(node_id):return False
+        ends={identifier for identifier,value in local.items() if value.get("type")=="endEvent"}
+        visited=set();queue=[node_id]
+        while queue:
+            current=queue.pop(0)
+            if current in visited:continue
+            visited.add(current);queue.extend(outgoing.get(current,[]))
+        return bool(visited&ends)
+
+    @classmethod
+    def _connect_resume_endpoint(cls,workflow,participant,endpoint,previous_id,used,report):
+        """Splice a proven orphan receive component after the prior local interaction."""
+        candidate=copy.deepcopy(workflow);nodes=candidate.get("nodes",[]);flows=candidate.get("flows",[])
+        process_id=participant.get("processRef");local={n.get("id"):n for n in nodes if isinstance(n,Mapping) and n.get("processRef")==process_id}
+        endpoint_id=endpoint.get("id");starts=[identifier for identifier,node in local.items() if node.get("type")=="startEvent"]
+        anchor_id=previous_id if previous_id in local else starts[0] if len(starts)==1 else None
+        if anchor_id is None or endpoint_id not in local:return False
+        local_flows=[f for f in flows if isinstance(f,dict) and f.get("source") in local and f.get("target") in local]
+        incoming=[f for f in local_flows if f.get("target")==endpoint_id]
+        anchors=[f for f in local_flows if f.get("source")==anchor_id and local.get(f.get("target"),{}).get("type")=="endEvent"]
+        if incoming or len(anchors)!=1:return False
+        outgoing={identifier:[] for identifier in local}
+        for flow in local_flows:outgoing[flow.get("source")].append(flow.get("target"))
+        reachable=set();queue=[endpoint_id]
+        while queue:
+            current=queue.pop(0)
+            if current in reachable:continue
+            reachable.add(current);queue.extend(outgoing.get(current,[]))
+        if anchor_id in reachable or endpoint_id in outgoing.get(anchor_id,[]):
+            report["artificial_cycles_rejected"].append({"process":process_id,"source":anchor_id,"target":endpoint_id,"status":"rollback"})
+            return False
+        anchor=anchors[0];old_target=anchor.get("target");anchor["target"]=endpoint_id
+        if not cls._valid_local_topology(candidate,process_id,endpoint_id):return False
+        workflow["flows"]=candidate["flows"];used.clear();used.update(cls._all_ids(workflow))
+        detail={"process":process_id,"orphan_nodes":sorted(reachable-{old_target}),"resume_endpoint":endpoint_id,
+                "previous_node":anchor_id,"next_node":endpoint_id,"removed_flow":anchor.get("id"),
+                "created_flows":[anchor.get("id")],"status":"committed"}
+        report["process_continuity_repairs"].append(detail)
+        report["premature_end_repairs"].append({**detail,"previous_end":old_target})
+        return True
+
+    @classmethod
+    def _ensure_local_process_continuity(cls,workflow,report):
+        """Attach one uniquely evidenced continuation after an incoming receive."""
+        process_ids=[p.get("id") for p in workflow.get("processes",[]) if isinstance(p,Mapping)]
+        business_types={"userTask","serviceTask","manualTask","scriptTask","businessRuleTask","sendTask","receiveTask","subProcess"}
+        for process_id in process_ids:
+            candidate=copy.deepcopy(workflow);nodes=[n for n in candidate.get("nodes",[]) if isinstance(n,Mapping) and n.get("processRef")==process_id]
+            local={n.get("id"):n for n in nodes};flows=[f for f in candidate.get("flows",[]) if isinstance(f,dict) and f.get("source") in local and f.get("target") in local]
+            starts=[n.get("id") for n in nodes if n.get("type")=="startEvent"]
+            if not starts:continue
+            outgoing={identifier:[] for identifier in local};incoming={identifier:[] for identifier in local}
+            for flow in flows:outgoing[flow.get("source")].append(flow.get("target"));incoming[flow.get("target")].append(flow.get("source"))
+            reachable=set();queue=list(starts)
+            while queue:
+                current=queue.pop(0)
+                if current in reachable:continue
+                reachable.add(current);queue.extend(outgoing.get(current,[]))
+            orphan_business={identifier for identifier,node in local.items() if node.get("type") in business_types and identifier not in reachable}
+            if not orphan_business:continue
+            undirected={identifier:set() for identifier in orphan_business}
+            for source in orphan_business:
+                for target in outgoing.get(source,[]):
+                    if target in orphan_business:undirected[source].add(target);undirected[target].add(source)
+            components=[];remaining=set(orphan_business)
+            while remaining:
+                component=set();queue=[min(remaining)]
+                while queue:
+                    current=queue.pop(0)
+                    if current in component:continue
+                    component.add(current);queue.extend(undirected.get(current,set())-component)
+                remaining-=component;components.append(component)
+            report["orphan_business_components"].append({"process":process_id,"components":[sorted(c) for c in components]})
+            if len(components)!=1:continue
+            component=components[0];roots=[identifier for identifier in component if not (set(incoming.get(identifier,[]))&component)]
+            if len(roots)!=1:continue
+            root=roots[0]
+            message_targets={m.get("target") for m in candidate.get("messageFlows",[]) if isinstance(m,Mapping)}
+            resumes=[]
+            for identifier in reachable&message_targets:
+                node=local.get(identifier,{})
+                end_flows=[f for f in flows if f.get("source")==identifier and local.get(f.get("target"),{}).get("type")=="endEvent"]
+                if node.get("type")=="receiveTask" and len(outgoing.get(identifier,[]))==1 and len(end_flows)==1:
+                    resumes.append((identifier,end_flows[0]))
+            if len(resumes)!=1:continue
+            resume,anchor=resumes[0]
+            component_reachable=set();queue=[root]
+            while queue:
+                current=queue.pop(0)
+                if current in component_reachable:continue
+                component_reachable.add(current);queue.extend(outgoing.get(current,[]))
+            if resume in component_reachable or resume in outgoing.get(root,[]):
+                report["artificial_cycles_rejected"].append({"process":process_id,"source":resume,"target":root,"status":"rollback"})
+                continue
+            old_end=anchor.get("target");anchor["target"]=root
+            if not cls._valid_local_topology(candidate,process_id,root):continue
+            workflow["flows"]=candidate["flows"]
+            detail={"process":process_id,"orphan_nodes":sorted(component),"resume_endpoint":resume,
+                    "previous_node":resume,"next_node":root,"removed_flow":anchor.get("id"),
+                    "created_flows":[anchor.get("id")],"status":"committed"}
+            report["process_continuity_repairs"].append(detail)
+            report["premature_end_repairs"].append({**detail,"previous_end":old_end})
+
+    @classmethod
+    def _repair_artificial_two_node_cycles(cls,workflow,requirements,report):
+        """Remove only synthetic reverse edges when grounded activity order proves direction."""
+        raw_activities=requirements.get("activities",[]) if isinstance(requirements,Mapping) else []
+        activities=[item for item in raw_activities if isinstance(item,Mapping) and item.get("name")]
+        if len(activities)<2:return
+        for process in [p for p in workflow.get("processes",[]) if isinstance(p,Mapping)]:
+            process_id=process.get("id");candidate=copy.deepcopy(workflow)
+            nodes=[n for n in candidate.get("nodes",[]) if isinstance(n,Mapping) and n.get("processRef")==process_id]
+            by_id={n.get("id"):n for n in nodes};flows=[f for f in candidate.get("flows",[]) if isinstance(f,dict) and f.get("source") in by_id and f.get("target") in by_id]
+            positions={}
+            for index,activity in enumerate(activities):
+                matches=[n for n in nodes if semantic_activity_score(activity,n).get("action_match") and semantic_activity_score(activity,n).get("object_match") is not False]
+                if len(matches)==1:positions.setdefault(matches[0].get("id"),index)
+            pairs={(f.get("source"),f.get("target")):f for f in flows}
+            repaired=False
+            for (source,target),forward in list(pairs.items()):
+                reverse=pairs.get((target,source))
+                if reverse is None or source not in positions or target not in positions or positions[source]>=positions[target]:continue
+                removable=reverse if reverse.get("properties",{}).get("synthetic") else None
+                if removable is None:continue
+                candidate["flows"].remove(removable);repaired=True
+                outgoing=[f for f in candidate["flows"] if isinstance(f,Mapping) and f.get("source")==target]
+                ends=[n for n in nodes if n.get("type")=="endEvent"]
+                if not outgoing and len(ends)==1:
+                    cls._add_flow(candidate["flows"],cls._all_ids(candidate),target,ends[0].get("id"),process_id)
+                if cls._valid_local_topology(candidate,process_id,target):
+                    workflow["flows"]=candidate["flows"]
+                    report["artificial_cycles_rejected"].append({"process":process_id,"source":target,"target":source,
+                                                                  "flow":removable.get("id"),"status":"removed"})
+                else:repaired=False
+                break
+            if repaired:continue
 
     @staticmethod
     def _valid_existing_endpoint(nodes,flows,node,process_id):
@@ -491,6 +651,9 @@ class GroundedWorkflowCanonicalizer:
         else:
             predecessor=anchor["source"];anchor["source"]=endpoint["id"]
             new_flow=cls._add_flow(flows,candidate_used,predecessor,endpoint["id"],process_id)
+        continuation=None
+        if node_type=="receiveTask" and not cls._valid_local_topology(candidate,process_id,endpoint["id"]):
+            continuation=cls._splice_unique_orphan_after_receive(candidate,process_id,endpoint["id"])
         if not cls._valid_local_topology(candidate,process_id,endpoint["id"]):
             report["interaction_endpoint_rollbacks"].append({"node":name,"process":process_id,"reason":"Local topology validation failed"})
             report["rewiring_validation_failures"].append({"node":endpoint["id"],"process":process_id})
@@ -500,7 +663,50 @@ class GroundedWorkflowCanonicalizer:
         report["nodes_inserted"].append({"id":endpoint["id"],"processRef":process_id,"position":position})
         report["interaction_endpoint_insertions"].append({"id":endpoint["id"],"process":process_id,"position":position})
         report["flows_rewired"].append({"id":anchor.get("id"),"inserted_node":endpoint["id"],"new_flow":new_flow["id"]})
+        if continuation:
+            detail={"process":process_id,"orphan_nodes":continuation["orphan_nodes"],"resume_endpoint":endpoint["id"],
+                    "previous_node":endpoint["id"],"next_node":continuation["root"],"removed_flow":continuation["flow"],
+                    "created_flows":[continuation["flow"]],"status":"committed"}
+            report["process_continuity_repairs"].append(detail)
+            report["premature_end_repairs"].append({**detail,"previous_end":continuation["end"]})
         return endpoint
+
+    @staticmethod
+    def _splice_unique_orphan_after_receive(workflow,process_id,receive_id):
+        nodes=[n for n in workflow.get("nodes",[]) if isinstance(n,Mapping) and n.get("processRef")==process_id]
+        local={n.get("id"):n for n in nodes};flows=[f for f in workflow.get("flows",[]) if isinstance(f,dict) and f.get("source") in local and f.get("target") in local]
+        outgoing={identifier:[] for identifier in local};incoming={identifier:[] for identifier in local}
+        for flow in flows:outgoing[flow.get("source")].append(flow.get("target"));incoming[flow.get("target")].append(flow.get("source"))
+        starts=[identifier for identifier,node in local.items() if node.get("type")=="startEvent"]
+        reachable=set();queue=list(starts)
+        while queue:
+            current=queue.pop(0)
+            if current in reachable:continue
+            reachable.add(current);queue.extend(outgoing.get(current,[]))
+        business_types={"userTask","serviceTask","manualTask","scriptTask","businessRuleTask","sendTask","receiveTask","subProcess"}
+        orphan={identifier for identifier,node in local.items() if node.get("type") in business_types and identifier not in reachable}
+        if not orphan:return None
+        undirected={identifier:set() for identifier in orphan}
+        for source in orphan:
+            for target in outgoing.get(source,[]):
+                if target in orphan:undirected[source].add(target);undirected[target].add(source)
+        visited=set();components=[]
+        for identifier in sorted(orphan):
+            if identifier in visited:continue
+            component=set();queue=[identifier]
+            while queue:
+                current=queue.pop(0)
+                if current in component:continue
+                component.add(current);queue.extend(undirected.get(current,set())-component)
+            visited|=component;components.append(component)
+        if len(components)!=1:return None
+        component=components[0];roots=[identifier for identifier in component if not (set(incoming.get(identifier,[]))&component)]
+        anchors=[f for f in flows if f.get("source")==receive_id and local.get(f.get("target"),{}).get("type")=="endEvent"]
+        if len(roots)!=1 or len(anchors)!=1:return None
+        root=roots[0]
+        if receive_id in outgoing.get(root,[]) or root==receive_id:return None
+        anchor=anchors[0];old_end=anchor.get("target");anchor["target"]=root
+        return {"root":root,"orphan_nodes":sorted(component),"flow":anchor.get("id"),"end":old_end}
 
     @staticmethod
     def _valid_local_topology(workflow,process_id,new_node_id):

@@ -439,3 +439,82 @@ def test_decision_scoring_distinguishes_initial_check_from_explicit_recheck():
         decisions=[{"name":"Verify Document Again","outcomes":["Valid","Invalid"]}]))
     assert first_report["decision_activity_candidates"][0]["selected"]=="initial"
     assert repeat_report["decision_activity_candidates"][0]["selected"]=="repeat"
+
+
+def test_interaction_resume_reconnects_existing_orphan_component_after_premature_end():
+    value=workflow()
+    value["nodes"]=[
+        {"id":"a_start","type":"startEvent","name":"Start","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}},
+        {"id":"a1","type":"serviceTask","name":"Prepare","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}},
+        {"id":"a_send","type":"sendTask","name":"Send to B","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}},
+        {"id":"a_receive","type":"receiveTask","name":"Receive from B","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}},
+        {"id":"a2","type":"serviceTask","name":"Continue","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}},
+        {"id":"a_end","type":"endEvent","name":"End","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}},
+    ]
+    value["flows"]=[
+        {"id":"a_f1","source":"a_start","target":"a1","processRef":"process_a","properties":{}},
+        {"id":"a_f2","source":"a1","target":"a_send","processRef":"process_a","properties":{}},
+        {"id":"a_premature","source":"a_send","target":"a_end","processRef":"process_a","properties":{}},
+        {"id":"a_f4","source":"a_receive","target":"a2","processRef":"process_a","properties":{}},
+        {"id":"a_f5","source":"a2","target":"a_end","processRef":"process_a","properties":{}},
+    ]
+    value["processes"].append({"id":"process_b","name":"B process","description":"","executable":False,"properties":{}})
+    value["participants"].append({"id":"participant_b","name":"B","processRef":"process_b","properties":{}})
+    value["nodes"] += [
+        {"id":"b_start","type":"startEvent","name":"Start","processRef":"process_b","participantRef":"participant_b","laneRef":None,"actor":None,"properties":{}},
+        {"id":"b_receive","type":"receiveTask","name":"Receive from A","processRef":"process_b","participantRef":"participant_b","laneRef":None,"actor":None,"properties":{}},
+        {"id":"b1","type":"serviceTask","name":"Process","processRef":"process_b","participantRef":"participant_b","laneRef":None,"actor":None,"properties":{}},
+        {"id":"b_send","type":"sendTask","name":"Send to A","processRef":"process_b","participantRef":"participant_b","laneRef":None,"actor":None,"properties":{}},
+        {"id":"b_end","type":"endEvent","name":"End","processRef":"process_b","participantRef":"participant_b","laneRef":None,"actor":None,"properties":{}},
+    ]
+    value["flows"] += [
+        {"id":"b_f1","source":"b_start","target":"b_receive","processRef":"process_b","properties":{}},
+        {"id":"b_f2","source":"b_receive","target":"b1","processRef":"process_b","properties":{}},
+        {"id":"b_f3","source":"b1","target":"b_send","processRef":"process_b","properties":{}},
+        {"id":"b_f4","source":"b_send","target":"b_end","processRef":"process_b","properties":{}},
+    ]
+    fixed,report=GroundedWorkflowCanonicalizer.canonicalize(value,requirements(
+        participants=[{"name":"A"},{"name":"B"}],interactions=[{"source":"A","target":"B"},{"source":"B","target":"A"}]))
+    edges={(flow["source"],flow["target"]) for flow in fixed["flows"]}
+    assert ("a_send","a_receive") in edges and ("a_receive","a2") in edges
+    assert ("a_send","a_end") not in edges
+    assert {(m["source"],m["target"]) for m in fixed["messageFlows"]}=={
+        ("a_send","b_receive"),("b_send","a_receive")}
+    issues=SemanticValidator().validate(fixed)
+    assert not [issue for issue in issues if issue["code"] in {"UNREACHABLE_NODE","NO_PATH_TO_END"}]
+    assert report["process_continuity_repairs"] and report["premature_end_repairs"]
+
+
+def test_incoming_interaction_connects_new_receive_to_unique_orphan_continuation():
+    value=workflow();value["nodes"].insert(1,{"id":"orphan","type":"serviceTask","name":"Continue","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}})
+    value["flows"].append({"id":"orphan_end","source":"orphan","target":"a_end","processRef":"process_a","properties":{}})
+    fixed,report=GroundedWorkflowCanonicalizer.canonicalize(value,requirements(
+        participants=[{"name":"A"},{"name":"B"}],interactions=[{"source":"B","target":"A"}]))
+    message=fixed["messageFlows"][0];receive=message["target"]
+    assert any(flow["source"]==receive and flow["target"]=="orphan" for flow in fixed["flows"])
+    assert not [issue for issue in SemanticValidator().validate(fixed) if issue["code"]=="UNREACHABLE_NODE"]
+    assert any(item["next_node"]=="orphan" for item in report["process_continuity_repairs"])
+
+
+def test_only_synthetic_reverse_edge_is_removed_when_grounded_order_proves_direction():
+    value=workflow();value["nodes"].insert(1,{"id":"first","type":"serviceTask","name":"Verify Document","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}})
+    value["nodes"].insert(2,{"id":"second","type":"serviceTask","name":"Approve Document","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}})
+    value["flows"]=[
+        {"id":"c1","source":"a_start","target":"first","processRef":"process_a","properties":{}},
+        {"id":"c2","source":"first","target":"second","processRef":"process_a","properties":{}},
+        {"id":"synthetic_reverse","source":"second","target":"first","processRef":"process_a","properties":{"synthetic":True}},
+    ]
+    fixed,report=GroundedWorkflowCanonicalizer.canonicalize(value,requirements(
+        activities=[{"name":"Verify Document"},{"name":"Approve Document"}]))
+    edges={(flow["source"],flow["target"]) for flow in fixed["flows"]}
+    assert ("first","second") in edges and ("second","first") not in edges and ("second","a_end") in edges
+    assert report["artificial_cycles_rejected"][0]["status"]=="removed"
+
+    genuine=workflow();genuine["nodes"].insert(1,{"id":"first","type":"serviceTask","name":"Verify Document","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}})
+    genuine["nodes"].insert(2,{"id":"second","type":"serviceTask","name":"Approve Document","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}})
+    genuine["flows"]=[{"id":"g1","source":"a_start","target":"first","processRef":"process_a","properties":{}},
+                      {"id":"g2","source":"first","target":"second","processRef":"process_a","properties":{}},
+                      {"id":"g3","source":"second","target":"first","processRef":"process_a","properties":{}}]
+    preserved,_=GroundedWorkflowCanonicalizer.canonicalize(genuine,requirements(
+        activities=[{"name":"Verify Document"},{"name":"Approve Document"}]))
+    assert any(flow["source"]=="second" and flow["target"]=="first" for flow in preserved["flows"])
