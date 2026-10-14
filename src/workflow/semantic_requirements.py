@@ -231,11 +231,14 @@ def _prefer_complete_activities(activities):
     """Drop only lexical fragments subsumed by a more complete activity."""
     tokenized=[]
     for item in activities:
-        from .coverage_validator import normalize_semantic_tokens
-        tokenized.append((item,normalize_semantic_tokens(item.get("name"))))
-    return [item for item,tokens in tokenized if not any(
-        tokens and len(tokens)==1 and tokens<other_tokens
-        for other,other_tokens in tokenized if other is not item)]
+        from .coverage_validator import activity_semantic_components
+        parts=activity_semantic_components(item.get("name"));tokenized.append((item,parts))
+    repetition={"again","repeat","repeated","nouveau","recheck"}
+    return [item for item,parts in tokenized if not any(
+        parts["tokens"] and parts["tokens"]<other_parts["tokens"]
+        and (parts["actions"]==other_parts["actions"] or len(parts["tokens"])==1)
+        and not ((other_parts["tokens"]-parts["tokens"])&repetition)
+        for other,other_parts in tokenized if other is not item)]
 def _norm(value):
     tokens=re.findall(r"[a-z0-9]+",unicodedata.normalize("NFKD",str(value or "")).encode("ascii","ignore").decode().lower())
     return " ".join(token[:-1] if len(token)>4 and token.endswith(("s","r")) else token for token in tokens)

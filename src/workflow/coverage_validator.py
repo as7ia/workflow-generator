@@ -19,13 +19,18 @@ _SEMANTIC_ALIASES={
     "approval":"accept","approved":"accept","approve":"accept",
     "rejet":"reject","rejeter":"reject","reject":"reject","rejects":"reject","rejection":"reject",
     "rejected":"reject","refus":"reject","refusal":"reject","refuse":"reject",
-    "envoyer":"send","envoi":"send","send":"send","sends":"send","sent":"send",
+    "envoyer":"send","envoie":"send","envoi":"send","send":"send","sends":"send","sent":"send",
     "transmettre":"send","transmission":"send","forward":"send","forwards":"send","forwarded":"send",
     "informer":"inform","informe":"inform","inform":"inform","informs":"inform","notify":"inform","notifies":"inform","notified":"inform",
     "approuver":"accept","approuve":"accept",
     "demander":"request","demande":"request","ask":"request","asks":"request",
     "attendre":"wait","attente":"wait","wait":"wait","waits":"wait","waiting":"wait",
     "reponse":"response","response":"response",
+    "document":"document","documents":"document","dossier":"document","dossiers":"document","file":"document","files":"document",
+    "commande":"order","commandes":"order","order":"order","orders":"order",
+    "information":"information","informations":"information","info":"information",
+    "completude":"completeness","completeness":"completeness","complete":"completeness",
+    "transmet":"send","transmis":"send",
     "payer":"pay","paie":"pay","paiement":"pay","pay":"pay","pays":"pay","payment":"pay",
     "cloture":"close","cloturer":"close","close":"close","closed":"close","closing":"close",
 }
@@ -54,21 +59,34 @@ def semantic_label_match(a,b):
 _ACTIVITY_ACTIONS={"send","receive","verify","accept","reject","inform","wait","pay","close"}
 _ACTIVITY_TYPES={"userTask","serviceTask","manualTask","scriptTask","businessRuleTask","sendTask","receiveTask","subProcess","intermediateCatchEvent"}
 
+def activity_semantic_components(value):
+    text=value.get("name") if isinstance(value,Mapping) else value;tokens=normalize_semantic_tokens(text)
+    actions=tokens&_ACTIVITY_ACTIONS
+    return {"actions":actions,"objects":tokens-_ACTIVITY_ACTIONS,"tokens":tokens}
+
+def semantic_activity_score(requirement,node):
+    if not isinstance(node,Mapping) or node.get("type") not in _ACTIVITY_TYPES:return {"action_match":False,"object_match":False,"type_match":False,"score":0}
+    expected=activity_semantic_components(requirement);actual=activity_semantic_components(node)
+    if node.get("type")=="sendTask":actual["actions"].add("send")
+    if node.get("type")=="receiveTask":actual["actions"].add("receive")
+    timer=isinstance(node.get("properties"),Mapping) and isinstance(node["properties"].get("timer"),Mapping)
+    if timer:actual["actions"].add("wait")
+    exact=semantic_label_match(requirement.get("name") if isinstance(requirement,Mapping) else requirement,node.get("name"))
+    action_match=exact or bool(expected["actions"]&actual["actions"])
+    generic_objects={"document","information","request"};communication={"send","receive","inform"}
+    object_match=(exact or timer and "wait" in expected["actions"] or not expected["objects"] or not actual["objects"] or bool(expected["objects"]&actual["objects"])
+                  or bool((expected["objects"]|actual["objects"])&generic_objects)
+                  or bool(expected["actions"]&communication))
+    type_match=(timer and "wait" in expected["actions"] or node.get("type")=="sendTask" and "send" in expected["actions"]
+                or node.get("type")=="receiveTask" and "receive" in expected["actions"] or node.get("type") not in {"sendTask","receiveTask","intermediateCatchEvent"})
+    score=(60 if action_match else 0)+(30 if object_match else 0)+(10 if type_match else 0)
+    if exact:score+=20
+    return {"action_match":action_match,"object_match":object_match,"type_match":bool(type_match),"score":score}
+
 def semantic_activity_match(requirement,node):
     """Match a BPM activity by canonical action first, then business object."""
-    if not isinstance(node,Mapping) or node.get("type") not in _ACTIVITY_TYPES:return False
-    expected=normalize_semantic_tokens(requirement.get("name") if isinstance(requirement,Mapping) else requirement)
-    actual=normalize_semantic_tokens(node.get("name"))
-    if semantic_label_match(requirement.get("name") if isinstance(requirement,Mapping) else requirement,node.get("name")):return True
-    expected_actions=expected&_ACTIVITY_ACTIONS;actual_actions=actual&_ACTIVITY_ACTIONS
-    if node.get("type")=="sendTask":actual_actions.add("send")
-    if node.get("type")=="receiveTask":actual_actions.add("receive")
-    timer=isinstance(node.get("properties"),Mapping) and isinstance(node["properties"].get("timer"),Mapping)
-    if timer:actual_actions.add("wait")
-    if not expected_actions or not actual_actions or expected_actions.isdisjoint(actual_actions):return False
-    if timer and "wait" in expected_actions:return True
-    expected_objects=expected-_ACTIVITY_ACTIONS;actual_objects=actual-_ACTIVITY_ACTIONS
-    return not expected_objects or not actual_objects or bool(expected_objects&actual_objects) or expected_objects<actual_objects or actual_objects<expected_objects
+    result=semantic_activity_score(requirement,node)
+    return result["action_match"] and result["object_match"] and result["type_match"]
 
 class CoverageValidator:
     CODES={"participants":"MISSING_PARTICIPANT","lanes":"MISSING_LANE","timers":"MISSING_TIMER","parallelisms":"MISSING_PARALLELISM","decisions":"MISSING_DECISION","interactions":"MISSING_INTERACTION","activities":"MISSING_ACTIVITY"}
@@ -101,9 +119,17 @@ class CoverageValidator:
         activity_types={"userTask","serviceTask","manualTask","scriptTask","businessRuleTask","sendTask","receiveTask","subProcess"}
         activity_nodes=[n for n in nodes if n.get("type") in activity_types]
         for req in self._valid(requirements,"activities",("name",)):
-            candidates=[n for n in [*activity_nodes,*timer_nodes] if semantic_activity_match(req,n)]
-            covered=bool(candidates) or any(self._text_match(req["name"],name) for name in timer_activities)
-            report.append(self._match_report("activity",req,activity_nodes,candidates))
+            scored=[]
+            for node in [*activity_nodes,*timer_nodes]:
+                detail=semantic_activity_score(req,node);detail.update(node_id=node.get("id"),participant_match=True)
+                scored.append((detail["score"],str(node.get("id")),node,detail))
+            compatible=[item for item in scored if item[3]["action_match"] and item[3]["object_match"] and item[3]["type_match"]]
+            compatible.sort(key=lambda item:(-item[0],item[1]));best=compatible[0][0] if compatible else None;second=compatible[1][0] if len(compatible)>1 else None
+            selected=compatible[0][2] if compatible and (second is None or best>second) else None
+            covered=selected is not None or any(self._text_match(req["name"],name) for name in timer_activities)
+            report.append({"type":"activity","requirement":dict(req),"candidates":[item[2].get("id") for item in scored],
+                           "candidate_scores":[item[3] for item in scored],"selected":selected.get("id") if selected else None,
+                           "score":1 if selected else 0,"covered":covered,"reason":"unique best semantic action/object match" if selected else "ambiguous or missing semantic activity"})
             if not covered:issues.append(self._missing("activities",req,self._rank(req,activity_nodes,self._name_score)))
         parallel_gateways=[n for n in nodes if n.get("type")=="parallelGateway" and len(outgoing.get(n.get("id"),[]))>=2]
         for req in self._requirements(requirements,"parallelisms"):

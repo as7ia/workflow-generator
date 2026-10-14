@@ -349,3 +349,40 @@ def test_equal_best_decision_activities_remain_ambiguous():
     assert diagnostic["selected"] is None and diagnostic["best_score"]==diagnostic["second_best_score"]
     assert diagnostic["reason"]=="equal best decision activities"
     assert not any(node["type"]=="exclusiveGateway" for node in fixed["nodes"])
+
+def test_materialized_interactions_report_exact_owned_messageflows():
+    fixed,report=GroundedWorkflowCanonicalizer.canonicalize(workflow(),requirements(
+        participants=[{"name":"A"},{"name":"B"}],interactions=[{"source":"A","target":"B"},{"source":"B","target":"A"}]))
+    assert len(report["interactions_materialized"])==2
+    assert len(report["interaction_messageflows_created"])==2
+    by_id={node["id"]:node for node in fixed["nodes"]};participants={p["name"]:p["id"] for p in fixed["participants"]}
+    pairs={(by_id[m["source"]]["participantRef"],by_id[m["target"]]["participantRef"]) for m in fixed["messageFlows"]}
+    assert pairs=={(participants["A"],participants["B"]),(participants["B"],participants["A"])}
+    assert not report["interaction_messageflow_rollbacks"]
+
+def test_decision_scoring_uses_grounded_lane_and_business_object():
+    value=workflow();value["lanes"].append({"id":"lane_a","name":"Document Review","processRef":"process_a","participantRef":"participant_a","properties":{}})
+    value["nodes"].insert(1,{"id":"check_document","type":"serviceTask","name":"Check Document","processRef":"process_a","participantRef":"participant_a","laneRef":"lane_a","actor":None,"properties":{}})
+    value["flows"]=[
+        {"id":"a1","source":"a_start","target":"check_document","processRef":"process_a","condition":None,"isDefault":False,"properties":{}},
+        {"id":"a2","source":"check_document","target":"a_end","processRef":"process_a","condition":None,"isDefault":False,"properties":{}},
+    ]
+    value["processes"].append({"id":"process_b","name":"B","description":"","executable":False,"properties":{}})
+    value["participants"].append({"id":"participant_b","name":"B","processRef":"process_b","properties":{}})
+    value["lanes"].append({"id":"lane_b","name":"Payment Review","processRef":"process_b","participantRef":"participant_b","properties":{}})
+    value["nodes"] += [
+        {"id":"b_start","type":"startEvent","name":"Start","processRef":"process_b","participantRef":"participant_b","laneRef":"lane_b","actor":None,"properties":{}},
+        {"id":"check_payment","type":"serviceTask","name":"Check Payment","processRef":"process_b","participantRef":"participant_b","laneRef":"lane_b","actor":None,"properties":{}},
+        {"id":"b_end","type":"endEvent","name":"End","processRef":"process_b","participantRef":"participant_b","laneRef":"lane_b","actor":None,"properties":{}},
+    ]
+    value["flows"] += [
+        {"id":"b1","source":"b_start","target":"check_payment","processRef":"process_b","condition":None,"isDefault":False,"properties":{}},
+        {"id":"b2","source":"check_payment","target":"b_end","processRef":"process_b","condition":None,"isDefault":False,"properties":{}},
+    ]
+    _,report=GroundedWorkflowCanonicalizer.canonicalize(value,requirements(decisions=[{
+        "name":"Check Document","outcomes":[{"name":"Valid","sourceLane":"Document Review"},{"name":"Invalid","sourceLane":"Document Review"}]}]))
+    diagnostic=report["decision_activity_candidates"][0];by_node={item["node_id"]:item for item in diagnostic["candidates"]}
+    assert diagnostic["selected"]=="check_document"
+    assert by_node["check_document"]["participant_match"] is True and by_node["check_document"]["object_match"] is True
+    assert by_node["check_payment"]["participant_match"] is False and by_node["check_payment"]["object_match"] is False
+    assert by_node["check_document"]["score"]>by_node["check_payment"]["score"]

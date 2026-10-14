@@ -7,7 +7,7 @@ import unicodedata
 from collections.abc import Mapping
 from typing import Any
 
-from .coverage_validator import normalize_semantic_tokens, semantic_activity_match, semantic_label_match
+from .coverage_validator import activity_semantic_components,normalize_semantic_tokens, semantic_activity_match, semantic_label_match
 
 
 class GroundedWorkflowCanonicalizer:
@@ -31,6 +31,8 @@ class GroundedWorkflowCanonicalizer:
             "self_loop_rejections": [], "rewiring_validation_failures": [],
             "decisions_materialized": [], "decision_materialization_diagnostics": [],
             "decision_activity_candidates": [],
+            "interactions_materialized": [], "interaction_messageflows_created": [],
+            "interaction_messageflow_rollbacks": [],
         }
         cls._ensure_participant_processes(value, requirements, report)
         cls._ensure_required_lanes(value, requirements, report)
@@ -55,21 +57,27 @@ class GroundedWorkflowCanonicalizer:
                 report["decision_materialization_diagnostics"].append({"decision":name,"status":"reused","gateway":existing[0].get("id")})
                 continue
             candidate=copy.deepcopy(workflow);nodes=candidate.get("nodes",[]);flows=candidate.get("flows",[])
+            participants=[p for p in candidate.get("participants",[]) if isinstance(p,Mapping)]
+            lanes=[lane for lane in candidate.get("lanes",[]) if isinstance(lane,Mapping)]
+            owner_labels=[decision.get(key) for key in ("participant","participantRef","lane","sourceLane") if decision.get(key)]
+            for raw_outcome in raw_outcomes:
+                if isinstance(raw_outcome,Mapping):owner_labels.extend(raw_outcome.get(key) for key in ("participant","participantRef","lane","sourceLane") if raw_outcome.get(key))
+            expected_participants={p.get("id") for p in participants if any(label==p.get("id") or semantic_label_match(label,p.get("name")) for label in owner_labels)}
+            expected_participants.update(lane.get("participantRef") for lane in lanes if any(label==lane.get("id") or semantic_label_match(label,lane.get("name")) for label in owner_labels))
             task_types={"userTask","serviceTask","manualTask","scriptTask","businessRuleTask"}
-            ranked=[];candidate_details=[];decision_tokens=normalize_semantic_tokens(name)
+            ranked=[];candidate_details=[];decision_tokens=normalize_semantic_tokens(name);decision_parts=activity_semantic_components(name)
             for node in nodes:
                 if not isinstance(node,Mapping) or node.get("type") not in task_types:continue
                 node_tokens=normalize_semantic_tokens(node.get("name"));label_match=semantic_label_match(name,node.get("name"));activity_match=semantic_activity_match({"name":name},node)
                 overlap=len(decision_tokens&node_tokens)/len(decision_tokens|node_tokens) if decision_tokens and node_tokens else 0
                 outgoing_count=sum(isinstance(flow,Mapping) and flow.get("source")==node.get("id") for flow in flows)
-                participant_match=not decision.get("participantRef") or node.get("participantRef")==decision.get("participantRef")
-                decision_actions={"verify","check","evaluate","validate","accept","reject"}
-                object_match=bool((decision_tokens-decision_actions)&(node_tokens-decision_actions))
-                score=(60 if label_match else 0)+(40 if activity_match else 0)+round(overlap*30)+(10 if outgoing_count==1 else 5 if outgoing_count else 0)+(10 if participant_match and decision.get("participantRef") else 0)
+                participant_match=(node.get("participantRef") in expected_participants) if owner_labels else None
+                node_parts=activity_semantic_components(node);object_match=bool(decision_parts["objects"]&node_parts["objects"])
+                score=(60 if label_match else 0)+(40 if activity_match else 0)+round(overlap*20)+(30 if object_match else -15 if decision_parts["objects"] and node_parts["objects"] else 0)+(10 if outgoing_count==1 else 5 if outgoing_count else 0)+(20 if participant_match is True else -20 if participant_match is False else 0)
                 detail={"node_id":node.get("id"),"score":score,"semantic_match":label_match or activity_match,
                         "participant_match":participant_match,"object_match":object_match}
                 candidate_details.append(detail)
-                if participant_match and score>0:ranked.append((score,str(node.get("id")),node))
+                if participant_match is not False and score>0:ranked.append((score,str(node.get("id")),node))
             ranked.sort(key=lambda item:(-item[0],item[1]));best=ranked[0][0] if ranked else None;second=ranked[1][0] if len(ranked)>1 else None
             threshold=30;margin=(best-second) if best is not None and second is not None else best
             task=ranked[0][2] if ranked and best>threshold and (second is None or margin>0) else None
@@ -304,10 +312,14 @@ class GroundedWorkflowCanonicalizer:
         last_endpoint={};used_endpoints=set()
         for interaction_index,interaction in enumerate(interactions):
             if not isinstance(interaction, Mapping): continue
+            before_interaction=copy.deepcopy(workflow);before_used=set(used)
+            tracked=("nodes_inserted","flows_rewired","interaction_endpoint_insertions","interaction_endpoints_added")
+            report_lengths={key:len(report[key]) for key in tracked}
             nodes=workflow.get("nodes",[]);flows=workflow.get("flows",[]);messages=workflow.get("messageFlows",[])
             source_participant=cls.resolve_participant(interaction.get("source"),participants)
             target_participant=cls.resolve_participant(interaction.get("target"),participants)
-            if source_participant is None or target_participant is None or source_participant.get("processRef") == target_participant.get("processRef"): continue
+            if source_participant is None or target_participant is None or source_participant.get("processRef") == target_participant.get("processRef"):
+                report["interaction_messageflow_rollbacks"].append({"interaction_index":interaction_index,"reason":"participants unresolved or share a process"});continue
             report["interaction_order"].append({"index":interaction_index,"source":interaction.get("source"),"target":interaction.get("target")})
             source_node = cls._message_endpoint(nodes,flows,source_participant,"source","sendTask",
                                                 target_participant.get("name"),interaction_index,used_endpoints,report)
@@ -331,17 +343,29 @@ class GroundedWorkflowCanonicalizer:
             else:
                 reuse={"id":target_node.get("id"),"role":"target"}
                 report["nodes_reused_for_interactions"].append(reuse);report["interaction_endpoint_reuse"].append(reuse)
-            if source_node is None or target_node is None: continue
+            if source_node is None or target_node is None:
+                workflow.clear();workflow.update(before_interaction);used.clear();used.update(before_used)
+                for key in tracked:del report[key][report_lengths[key]:]
+                report["interaction_messageflow_rollbacks"].append({"interaction_index":interaction_index,"reason":"endpoint resolution failed"})
+                continue
             used_endpoints.update((source_node["id"],target_node["id"]))
             last_endpoint[source_participant.get("id")]=source_node["id"]
             last_endpoint[target_participant.get("id")]=target_node["id"]
             pair = (source_node["id"], target_node["id"])
             if pair[0]==pair[1]:
+                workflow.clear();workflow.update(before_interaction);used.clear();used.update(before_used)
+                for key in tracked:del report[key][report_lengths[key]:]
                 report["self_loop_rejections"].append({"interaction_index":interaction_index,"source":pair[0],"target":pair[1]})
+                report["interaction_messageflow_rollbacks"].append({"interaction_index":interaction_index,"reason":"self messageFlow rejected"})
                 continue
-            if not any(isinstance(m, Mapping) and (m.get("source"), m.get("target")) == pair for m in messages):
+            existing=next((m for m in messages if isinstance(m,Mapping) and (m.get("source"),m.get("target"))==pair),None)
+            if existing is None:
                 message_id = cls._unique_id("message_flow", used); used.add(message_id)
                 messages.append({"id": message_id, "source": pair[0], "target": pair[1], "properties": {}})
+                report["interaction_messageflows_created"].append({"interaction_index":interaction_index,"id":message_id,"source":pair[0],"target":pair[1]})
+            else:message_id=existing.get("id")
+            report["interactions_materialized"].append({"interaction_index":interaction_index,"source_participant":source_participant.get("id"),
+                "target_participant":target_participant.get("id"),"source_node":pair[0],"target_node":pair[1],"messageFlow":message_id})
 
     @classmethod
     def _message_endpoint(cls,nodes,flows,participant,side,node_type,counterpart_name,

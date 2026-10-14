@@ -245,3 +245,23 @@ def test_coverage_matching_report_explains_activity_and_missing_interaction():
 def test_activity_normalization_prefers_complete_requirement_over_fragments():
     normalized,_=normalize_semantic_requirements({"activities":["approve request","approve","request"]})
     assert normalized["activities"]==[{"name":"approve request"}]
+
+def test_realistic_bilingual_paraphrases_are_covered_with_selected_evidence():
+    cases=[
+        ("Vérification du dossier","Check Order Completeness"),
+        ("Approuver la commande","Approve Order"),
+        ("Transmettre le dossier","Forward to Finance"),
+    ]
+    for requirement_name,node_name in cases:
+        w=workflow();w["nodes"]=[node("candidate",node_name,"serviceTask","pa")]
+        issues,report=CoverageValidator().validate_with_report(requirements(activities=[{"name":requirement_name}]),w)
+        activity=next(item for item in report if item["type"]=="activity")
+        assert "MISSING_ACTIVITY" not in {issue["code"] for issue in issues}
+        assert activity["covered"] is True and activity["selected"]=="candidate"
+        score=next(item for item in activity["candidate_scores"] if item["node_id"]=="candidate")
+        assert score["action_match"] and score["object_match"] and score["type_match"] and score["score"]>0
+
+def test_activity_deduplication_collapses_lexical_paraphrase_not_repetition():
+    normalized,_=normalize_semantic_requirements({"activities":[
+        "Envoyer le dossier de commande","envoie dossier","Transmettre le dossier","transmet dossier"]})
+    assert normalized["activities"]==[{"name":"Envoyer le dossier de commande"}]
