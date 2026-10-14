@@ -331,7 +331,7 @@ def test_decision_activity_scoring_selects_unique_best_candidate():
     fixed,report=GroundedWorkflowCanonicalizer.canonicalize(value,requirements(
         decisions=[{"name":"Verify application","outcomes":["Accept","Reject"]}]))
     diagnostic=report["decision_activity_candidates"][0]
-    assert diagnostic["selected"]=="best" and diagnostic["best_score"]>diagnostic["second_best_score"]
+    assert diagnostic["selected"]=="best" and diagnostic["best_score"] is not None and diagnostic["second_best_score"] is None
     assert any(node["type"]=="exclusiveGateway" for node in fixed["nodes"])
 
 def test_equal_best_decision_activities_remain_ambiguous():
@@ -583,3 +583,37 @@ def test_missing_start_with_multiple_local_roots_is_reported_ambiguous():
     diagnostic=next(item for item in report["process_boundary_report"] if item["process_id"]=="process_a")
     assert diagnostic["status"]=="ambiguous" and set(diagnostic["root_candidates"])=={"root_1","root_2"}
     assert not any(node["type"]=="startEvent" for node in fixed["nodes"])
+
+
+def test_unowned_global_boundaries_stay_with_source_process_and_are_traced():
+    value=workflow();value["participants"].append({"id":"participant_b","name":"B","processRef":"process_a","properties":{}})
+    value["nodes"][0]["participantRef"]=None;value["nodes"][-1]["participantRef"]=None
+    value["nodes"].insert(1,{"id":"work_a","type":"serviceTask","name":"Work A","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}})
+    value["nodes"].insert(2,{"id":"work_b","type":"serviceTask","name":"Work B","processRef":"process_a","participantRef":"participant_b","laneRef":None,"actor":None,"properties":{}})
+    value["flows"]=[{"id":"u1","source":"a_start","target":"work_a","processRef":"process_a","properties":{}},
+                    {"id":"u2","source":"work_a","target":"work_b","processRef":"process_a","properties":{}},
+                    {"id":"u3","source":"work_b","target":"a_end","processRef":"process_a","properties":{}}]
+    fixed,report=GroundedWorkflowCanonicalizer.canonicalize(value,requirements(participants=[{"name":"A"},{"name":"B"}]))
+    by_id={node["id"]:node for node in fixed["nodes"]}
+    assert by_id["a_start"]["processRef"]==by_id["a_end"]["processRef"]=="process_a"
+    lifecycle={item["node_id"]:item for item in report["boundary_lifecycle"]}
+    assert lifecycle["a_start"]["action"]==lifecycle["a_end"]["action"]=="preserved"
+    assert all(item["action"]!="deleted" for item in report["boundary_lifecycle"])
+
+
+def test_decision_report_never_has_second_score_without_best_score():
+    _,report=GroundedWorkflowCanonicalizer.canonicalize(workflow(),requirements(
+        decisions=[{"name":"Verify document","outcomes":["Yes","No"]}]))
+    diagnostic=report["decision_activity_candidates"][0]
+    assert not (diagnostic["best_score"] is None and diagnostic["second_best_score"] is not None)
+
+
+def test_duplicate_message_flows_are_removed_by_semantic_identity():
+    value=workflow();value["processes"].append({"id":"process_b","name":"B","description":"","executable":False,"properties":{}})
+    value["participants"].append({"id":"participant_b","name":"B","processRef":"process_b","properties":{}})
+    value["nodes"].append({"id":"receive_b","type":"receiveTask","name":"Receive","processRef":"process_b","participantRef":"participant_b","laneRef":None,"actor":None,"properties":{}})
+    value["messageFlows"]=[{"id":"m1","source":"a_start","target":"receive_b","name":"Notice","properties":{}},
+                           {"id":"m2","source":"a_start","target":"receive_b","name":"Notice","properties":{}}]
+    fixed,report=GroundedWorkflowCanonicalizer.canonicalize(value,requirements())
+    assert [m["id"] for m in fixed["messageFlows"]]==["m1"]
+    assert report["duplicate_message_flows_removed"]==[{"id":"m2","kept":"m1","source":"a_start","target":"receive_b"}]

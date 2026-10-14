@@ -100,10 +100,25 @@ class CoverageValidator:
                         and item[3]["type_match"] and item[3]["participant_match"] is not False]
             compatible.sort(key=lambda item:(-item[0],item[1]));best=compatible[0][0] if compatible else None;second=compatible[1][0] if len(compatible)>1 else None
             selected=compatible[0][2] if compatible and (second is None or best>second) else None
+            evidence=None
+            expected_analysis=analyze_activity_semantics(req)
+            if selected is not None and expected_analysis["action_family"] in {"send","forward","notify","request"}:
+                message=next((m for m in messages if m.get("source")==selected.get("id")
+                              and node_by_id.get(m.get("target"),{}).get("processRef")!=selected.get("processRef")),None)
+                if message is not None:
+                    evidence={"activity_node":selected.get("id"),"counterpart_node":message.get("target"),
+                              "message_flow":message.get("id"),"direction":"source_to_target"}
+            if selected is None:
+                dual=self._communication_dual_candidates(req,nodes,messages,node_by_id,participant_by_id)
+                dual.sort(key=lambda item:(-item[0],str(item[1].get("id"))))
+                if dual and (len(dual)==1 or dual[0][0]>dual[1][0]):
+                    selected=dual[0][1];evidence=dual[0][2]
             covered=selected is not None or any(self._text_match(req["name"],name) for name in timer_activities)
             report.append({"type":"activity","requirement":dict(req),"candidates":[item[2].get("id") for item in scored],
                            "candidate_scores":[item[3] for item in scored],"selected":selected.get("id") if selected else None,
-                           "score":1 if selected else 0,"covered":covered,"reason":"unique best semantic action/object match" if selected else "ambiguous or missing semantic activity"})
+                           "score":1 if selected else 0,"covered":covered,
+                           "evidence":evidence,"reason":"communication dual proved by messageFlow" if evidence else
+                           "unique best semantic action/object match" if selected else "ambiguous or missing semantic activity"})
             if not covered:issues.append(self._missing("activities",req,self._rank(req,activity_nodes,self._name_score)))
         parallel_gateways=[n for n in nodes if n.get("type")=="parallelGateway" and len(outgoing.get(n.get("id"),[]))>=2]
         for req in self._requirements(requirements,"parallelisms"):
@@ -213,6 +228,27 @@ class CoverageValidator:
         expected={p.get("id") for p in participants if any(label==p.get("id") or semantic_label_match(label,p.get("name")) for label in labels)}
         expected.update(lane.get("participantRef") for lane in lanes if any(label==lane.get("id") or semantic_label_match(label,lane.get("name")) for label in labels))
         return node.get("participantRef") in expected if expected else None
+    def _communication_dual_candidates(self,req,nodes,messages,node_by_id,participant_by_id):
+        expected=analyze_activity_semantics(req)
+        if expected["action_family"] not in {"send","forward","notify","request"}:return []
+        source_labels=[req.get(key) for key in ("participant","participantRef","source","sourceParticipant","actor") if req.get(key)]
+        target_labels=[req.get(key) for key in ("target","targetParticipant","destination") if req.get(key)]
+        result=[]
+        for message in messages:
+            source=node_by_id.get(message.get("source"));target=node_by_id.get(message.get("target"))
+            if not source or not target or source.get("processRef")==target.get("processRef"):continue
+            if target.get("type")!="receiveTask" and analyze_activity_semantics(target)["action_family"]!="receive":continue
+            source_owner=participant_by_id.get(source.get("participantRef"),{});target_owner=participant_by_id.get(target.get("participantRef"),{})
+            if source_labels and not any(label==source_owner.get("id") or semantic_label_match(label,source_owner.get("name")) for label in source_labels):continue
+            if target_labels and not any(label==target_owner.get("id") or semantic_label_match(label,target_owner.get("name")) for label in target_labels):continue
+            actual=analyze_activity_semantics(target)
+            object_match=(bool(expected["objects"]&actual["objects"]) if expected["objects"] and actual["objects"]
+                          else None if not expected["objects"] else False)
+            if object_match is False:continue
+            score=80+(30 if object_match is True else 0)
+            result.append((score,target,{"activity_node":source.get("id"),"counterpart_node":target.get("id"),
+                                         "message_flow":message.get("id"),"direction":"source_to_target"}))
+        return result
     def _interaction_candidates(self,req,messages,node_by_id,participant_by_id):
         ranked=[]
         for message in messages:

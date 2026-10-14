@@ -38,13 +38,17 @@ class GroundedWorkflowCanonicalizer:
             "orphan_business_components": [], "artificial_cycles_rejected": [],
             "process_boundary_report": [], "boundary_event_reassignments": [],
             "process_split_flows_removed": [],
+            "boundary_lifecycle": [], "duplicate_message_flows_removed": [],
         }
+        boundary_before=cls._boundary_snapshot(value)
         cls._ensure_participant_processes(value, requirements, report)
         cls._ensure_process_boundaries(value, report)
+        cls._record_boundary_lifecycle(boundary_before,value,report)
         cls._ensure_required_lanes(value, requirements, report)
         cls._normalize_timer_nodes(value, requirements, report)
         cls._reclassify_local_messages(value, requirements, report)
         cls._ensure_interactions(value, requirements, report)
+        cls._deduplicate_message_flows(value,report)
         cls._materialize_decisions(value,requirements,report)
         cls._repair_artificial_two_node_cycles(value, requirements, report)
         cls._ensure_local_process_continuity(value, report)
@@ -73,35 +77,35 @@ class GroundedWorkflowCanonicalizer:
             expected_participants={p.get("id") for p in participants if any(label==p.get("id") or semantic_label_match(label,p.get("name")) for label in owner_labels)}
             expected_participants.update(lane.get("participantRef") for lane in lanes if any(label==lane.get("id") or semantic_label_match(label,lane.get("name")) for label in owner_labels))
             task_types={"userTask","serviceTask","manualTask","scriptTask","businessRuleTask"}
-            ranked=[];diagnostic_ranked=[];candidate_details=[];decision_tokens=normalize_semantic_tokens(name);decision_parts=analyze_activity_semantics(name)
+            ranked=[];candidate_details=[];decision_tokens=normalize_semantic_tokens(name);decision_parts=analyze_activity_semantics(name)
             for node in nodes:
                 if not isinstance(node,Mapping) or node.get("type") not in task_types:continue
                 node_tokens=normalize_semantic_tokens(node.get("name"));activity=semantic_activity_score({"name":name},node)
-                action_match=activity["action_match"]
+                node_parts=analyze_activity_semantics(node)
+                decision_support=(node_parts["action_family"]=="verify" and decision_parts["action_family"] not in {"send","receive","forward","notify","request"})
+                action_match=activity["action_match"] or decision_support
                 overlap=len(decision_tokens&node_tokens)/len(decision_tokens|node_tokens) if decision_tokens and node_tokens else 0
                 outgoing_count=sum(isinstance(flow,Mapping) and flow.get("source")==node.get("id") for flow in flows)
                 participant_match=(node.get("participantRef") in expected_participants) if owner_labels else None
-                node_parts=analyze_activity_semantics(node);object_match=activity["object_match"]
-                repetition_match=decision_parts["repetition_marker"]==node_parts["repetition_marker"]
+                object_match=activity["object_match"]
+                qualifier_match=decision_parts["qualifiers"]==node_parts["qualifiers"]
                 score=((80 if action_match else -100)+(30 if object_match is True else -30 if object_match is False else 0)
                        +round(overlap*20)+(10 if outgoing_count==1 else 5 if outgoing_count else 0)
                        +(20 if participant_match is True else -20 if participant_match is False else 0)
-                       +(15 if repetition_match else -25))
+                       +(20 if qualifier_match else -30))
                 detail={"node_id":node.get("id"),"score":score,"semantic_match":action_match and object_match is not False,
                         "action_match":action_match,"participant_match":participant_match,"object_match":object_match,
-                        "repetition_match":repetition_match,
+                        "repetition_match":qualifier_match,"qualifier_match":qualifier_match,
                         "semantic_analysis":{"requirement":semantic_analysis_for_report(decision_parts),
                                              "candidate":semantic_analysis_for_report(node_parts)}}
                 candidate_details.append(detail)
-                if participant_match is not False and score>0:diagnostic_ranked.append((score,str(node.get("id")),node))
                 if action_match and object_match is not False and participant_match is not False and score>0:
                     ranked.append((score,str(node.get("id")),node))
-            ranked.sort(key=lambda item:(-item[0],item[1]));diagnostic_ranked.sort(key=lambda item:(-item[0],item[1]))
-            best=ranked[0][0] if ranked else None;eligible_second=ranked[1][0] if len(ranked)>1 else None
-            second=next((item[0] for item in diagnostic_ranked if not ranked or item[2].get("id")!=ranked[0][2].get("id")),None)
-            threshold=30;margin=(best-eligible_second) if best is not None and eligible_second is not None else best
-            task=ranked[0][2] if ranked and best>threshold and (eligible_second is None or margin>0) else None
-            selection_reason="unique best decision activity" if task is not None else "equal best decision activities" if ranked and eligible_second==best else "no decision activity above threshold"
+            ranked.sort(key=lambda item:(-item[0],item[1]))
+            best=ranked[0][0] if ranked else None;second=ranked[1][0] if len(ranked)>1 else None
+            threshold=30;required_margin=1;margin=(best-second) if best is not None and second is not None else best
+            task=ranked[0][2] if ranked and best>=threshold and (second is None or margin>=required_margin) else None
+            selection_reason="unique best decision activity" if task is not None else "equal best decision activities" if ranked and second==best else "no decision activity above threshold"
             report["decision_activity_candidates"].append({"decision":name,"candidates":candidate_details,
                 "best_score":best,"second_best_score":second,"selection_threshold":threshold,
                 "selection_margin":margin,"selected":task.get("id") if task else None,"reason":selection_reason})
@@ -352,6 +356,42 @@ class GroundedWorkflowCanonicalizer:
             to_end.add(current);queue.extend(incoming.get(current,[]))
         business={n.get("id") for n in nodes if n.get("type") not in {"startEvent","endEvent"}}
         return business<=reachable and business<=to_end and bool(reachable&ends)
+
+    @staticmethod
+    def _boundary_snapshot(workflow):
+        return {n.get("id"):{"type":n.get("type"),"process":n.get("processRef"),"participant":n.get("participantRef")}
+                for n in workflow.get("nodes",[]) if isinstance(n,Mapping)
+                and n.get("type") in {"startEvent","endEvent"} and n.get("id")}
+
+    @classmethod
+    def _record_boundary_lifecycle(cls,before,workflow,report):
+        after=cls._boundary_snapshot(workflow)
+        for node_id,value in before.items():
+            current=after.get(node_id)
+            action="deleted" if current is None else "moved" if (current["process"],current["participant"])!=(value["process"],value["participant"]) else "preserved"
+            report["boundary_lifecycle"].append({"node_id":node_id,"type":value["type"],
+                "process_before":value["process"],"participant_before":value["participant"],
+                "process_after":current.get("process") if current else None,
+                "participant_after":current.get("participant") if current else None,"action":action})
+        for node_id,value in after.items():
+            if node_id not in before:
+                report["boundary_lifecycle"].append({"node_id":node_id,"type":value["type"],
+                    "process_before":None,"participant_before":None,"process_after":value["process"],
+                    "participant_after":value["participant"],"action":"cloned"})
+
+    @staticmethod
+    def _deduplicate_message_flows(workflow,report):
+        retained=[];seen={}
+        for message in workflow.get("messageFlows",[]):
+            if not isinstance(message,Mapping):retained.append(message);continue
+            semantic=tuple(sorted(normalize_semantic_tokens(message.get("name"))))
+            marker=(message.get("source"),message.get("target"),semantic)
+            if marker in seen:
+                report["duplicate_message_flows_removed"].append({"id":message.get("id"),"kept":seen[marker],
+                                                                   "source":marker[0],"target":marker[1]})
+                continue
+            seen[marker]=message.get("id");retained.append(message)
+        workflow["messageFlows"]=retained
 
     @classmethod
     def _ensure_required_lanes(cls, workflow, requirements, report):

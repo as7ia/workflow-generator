@@ -287,3 +287,34 @@ def test_activity_matching_report_uses_tristate_participant_and_object_evidence(
     assert scores["right"]["semantic_analysis"]["requirement"]["action_family"]=="verify"
     score=semantic_activity_score("verify",node("candidate","check"))
     assert score["object_match"] is None
+
+
+def test_french_and_english_action_morphology_share_canonical_families():
+    variants={"notify":["informe","informera","informer","informé","notifies"],
+              "verify":["vérifie","vérifier","vérification","checked"],
+              "send":["envoie","enverra","envoyé","sent"],
+              "pay":["paiera","payer","payment","paid"]}
+    for family,labels in variants.items():
+        assert all(next(iter(__import__("src.workflow.activity_semantics",fromlist=["analyze_activity_semantics"]).analyze_activity_semantics(label)["actions"]),None)==family for label in labels)
+
+
+def test_support_verbs_are_not_business_objects():
+    from src.workflow.activity_semantics import analyze_activity_semantics
+    analysis=analyze_activity_semantics("Effectuer paiement")
+    assert analysis["action_family"]=="pay" and "effectuer" not in analysis["objects"]
+
+
+def test_send_activity_can_use_receive_endpoint_only_with_messageflow_direction_evidence():
+    w=workflow();w["nodes"]=[node("send","Send document","sendTask","pa"),node("receive","Receive document","receiveTask","pb")]
+    w["nodes"][1]["processRef"]="pbp"
+    w["messageFlows"]=[{"id":"message","source":"send","target":"receive","properties":{}}]
+    req=requirements(activities=[{"name":"Send document","participant":"Actor A","target":"Actor B"}])
+    issues,report=CoverageValidator().validate_with_report(req,w)
+    assert "MISSING_ACTIVITY" not in {issue["code"] for issue in issues}
+    assert report[0]["selected"]=="send"
+    w["nodes"]=[node("other_source","Unspecified","serviceTask","pa"),node("receive","Receive document","receiveTask","pb")]
+    w["nodes"][1]["processRef"]="pbp"
+    w["messageFlows"][0]["source"]="other_source"
+    issues,report=CoverageValidator().validate_with_report(req,w)
+    assert report[0]["selected"]=="receive"
+    assert report[0]["evidence"]=={"activity_node":"other_source","counterpart_node":"receive","message_flow":"message","direction":"source_to_target"}
