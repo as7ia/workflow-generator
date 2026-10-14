@@ -197,3 +197,51 @@ def test_participant_resolution_report_exposes_every_candidate_decision():
     assert attempt["semantic_match"] is True and attempt["decision"]=="reuse"
     assert attempt["normalized_requirement"]==attempt["normalized_candidate"]==["sales"]
     assert len(fixed["participants"])==2
+
+
+def test_existing_business_message_endpoints_are_reused_in_both_directions():
+    value=workflow();value["participants"][0]["name"]="Customer"
+    value["processes"].append({"id":"department_process","name":"Operations","description":"","executable":False,"properties":{}})
+    value["participants"].append({"id":"department","name":"Operations Department","processRef":"department_process","properties":{}})
+    value["nodes"] += [
+        {"id":"d_start","type":"startEvent","name":"Start","processRef":"department_process","participantRef":"department","laneRef":None,"actor":None,"properties":{}},
+        {"id":"request_received","type":"receiveTask","name":"Customer submits document","processRef":"department_process","participantRef":"department","laneRef":None,"actor":None,"properties":{}},
+        {"id":"notify_customer","type":"sendTask","name":"Notify customer","processRef":"department_process","participantRef":"department","laneRef":None,"actor":None,"properties":{}},
+        {"id":"d_end","type":"endEvent","name":"End","processRef":"department_process","participantRef":"department","laneRef":None,"actor":None,"properties":{}},
+    ]
+    value["flows"] += [
+        {"id":"d1","source":"d_start","target":"request_received","processRef":"department_process","condition":None,"isDefault":False,"properties":{}},
+        {"id":"d2","source":"request_received","target":"notify_customer","processRef":"department_process","condition":None,"isDefault":False,"properties":{}},
+        {"id":"d3","source":"notify_customer","target":"d_end","processRef":"department_process","condition":None,"isDefault":False,"properties":{}},
+    ]
+    fixed,report=GroundedWorkflowCanonicalizer.canonicalize(value,requirements(
+        participants=[{"name":"Customer"},{"name":"Operations Department"}],
+        interactions=[{"source":"Customer","target":"Operations Department"},{"source":"Operations Department","target":"Customer"}]))
+    messages={(m["source"],m["target"]) for m in fixed["messageFlows"]}
+    assert any(target=="request_received" for _,target in messages)
+    assert any(source=="notify_customer" for source,_ in messages)
+    assert {item["id"] for item in report["interaction_endpoint_reuse"]}>={"request_received","notify_customer"}
+
+
+def test_three_ordered_interactions_append_endpoints_without_isolation():
+    fixed,_=GroundedWorkflowCanonicalizer.canonicalize(workflow(),requirements(
+        participants=[{"name":"A"},{"name":"B"}],interactions=[
+            {"source":"A","target":"B"},{"source":"B","target":"A"},{"source":"A","target":"B"}]))
+    participant_a=next(p for p in fixed["participants"] if p["name"]=="A")
+    local={n["id"]:n for n in fixed["nodes"] if n["processRef"]==participant_a["processRef"]}
+    outgoing={f["source"]:f["target"] for f in fixed["flows"] if f["source"] in local and f["target"] in local}
+    current=next(node_id for node_id,node in local.items() if node["type"]=="startEvent");types=[]
+    while current in outgoing:
+        current=outgoing[current];types.append(local[current]["type"])
+    assert [kind for kind in types if kind in {"sendTask","receiveTask"}]==["sendTask","receiveTask","sendTask"]
+    forbidden={"ISOLATED_TASK","MISSING_INCOMING_FLOW","MISSING_OUTGOING_FLOW","UNREACHABLE_NODE"}
+    assert forbidden.isdisjoint(issue["code"] for issue in SemanticValidator().validate(fixed))
+
+
+def test_local_self_message_is_rejected_instead_of_becoming_sequence_self_loop():
+    value=workflow();value["messageFlows"]=[{"id":"self","source":"a_start","target":"a_start","properties":{}}]
+    fixed,report=GroundedWorkflowCanonicalizer.canonicalize(value,requirements(
+        participants=[{"name":"A"},{"name":"B"}],interactions=[{"source":"A","target":"B"}]))
+    assert not any(flow["source"]==flow["target"] for flow in fixed["flows"])
+    assert not any(message["source"]==message["target"] for message in fixed["messageFlows"])
+    assert report["self_loop_rejections"]==[{"flow_id":"self","source":"a_start","target":"a_start"}]

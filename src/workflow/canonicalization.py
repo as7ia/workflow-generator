@@ -27,6 +27,8 @@ class GroundedWorkflowCanonicalizer:
             "participant_resolution_attempts": [], "node_ownership_changes": [],
             "interaction_endpoint_reuse": [], "interaction_endpoint_insertions": [],
             "interaction_endpoint_rollbacks": [],
+            "interaction_endpoint_candidates": [], "interaction_order": [],
+            "self_loop_rejections": [], "rewiring_validation_failures": [],
         }
         cls._ensure_participant_processes(value, requirements, report)
         cls._ensure_required_lanes(value, requirements, report)
@@ -214,6 +216,9 @@ class GroundedWorkflowCanonicalizer:
             if not source or not target or source.get("processRef") != target.get("processRef"):
                 retained.append(message); continue
             pair = (message.get("source"), message.get("target"))
+            if pair[0] == pair[1]:
+                report["self_loop_rejections"].append({"flow_id":message.get("id"),"source":pair[0],"target":pair[1]})
+                continue
             if pair not in pairs:
                 cls._add_flow(flows, used, pair[0], pair[1], source.get("processRef"), message.get("name"))
                 pairs.add(pair)
@@ -228,47 +233,80 @@ class GroundedWorkflowCanonicalizer:
         nodes, flows, messages = workflow.get("nodes", []), workflow.get("flows", []), workflow.get("messageFlows", [])
         if not all(isinstance(items, list) for items in (nodes, flows, messages)): return
         used = cls._all_ids(workflow)
-        for interaction in interactions:
+        last_endpoint={};used_endpoints=set()
+        for interaction_index,interaction in enumerate(interactions):
             if not isinstance(interaction, Mapping): continue
-            nodes=workflow.get("nodes",[]);messages=workflow.get("messageFlows",[])
+            nodes=workflow.get("nodes",[]);flows=workflow.get("flows",[]);messages=workflow.get("messageFlows",[])
             source_participant=cls.resolve_participant(interaction.get("source"),participants)
             target_participant=cls.resolve_participant(interaction.get("target"),participants)
             if source_participant is None or target_participant is None or source_participant.get("processRef") == target_participant.get("processRef"): continue
-            source_node = cls._message_endpoint(nodes, messages, source_participant, "source", "sendTask", target_participant.get("name"))
-            target_node = cls._message_endpoint(nodes, messages, target_participant, "target", "receiveTask", source_participant.get("name"))
+            report["interaction_order"].append({"index":interaction_index,"source":interaction.get("source"),"target":interaction.get("target")})
+            source_node = cls._message_endpoint(nodes,flows,source_participant,"source","sendTask",
+                                                target_participant.get("name"),interaction_index,used_endpoints,report)
+            target_node = cls._message_endpoint(nodes,flows,target_participant,"target","receiveTask",
+                                                source_participant.get("name"),interaction_index,used_endpoints,report)
             if source_node is None:
+                previous=last_endpoint.get(source_participant.get("id"))
                 source_node = cls.insert_node_into_process_sequence(
-                    workflow, source_participant, "sendTask", f"Send to {target_participant.get('name')}", used, "before_end", report)
+                    workflow,source_participant,"sendTask",f"Send to {target_participant.get('name')}",used,
+                    "after_node" if previous else "before_end",report,previous)
                 if source_node is not None: report["interaction_endpoints_added"].append({"id": source_node["id"], "role": "source"})
             else:
                 reuse={"id":source_node.get("id"),"role":"source"}
                 report["nodes_reused_for_interactions"].append(reuse);report["interaction_endpoint_reuse"].append(reuse)
             if target_node is None:
-                receive_position="before_end" if cls._has_message_between(
-                    messages,nodes,target_participant.get("id"),source_participant.get("id")) else "after_start"
+                previous=last_endpoint.get(target_participant.get("id"))
                 target_node = cls.insert_node_into_process_sequence(
-                    workflow, target_participant, "receiveTask", f"Receive from {source_participant.get('name')}", used, receive_position, report)
+                    workflow,target_participant,"receiveTask",f"Receive from {source_participant.get('name')}",used,
+                    "after_node" if previous else "after_start",report,previous)
                 if target_node is not None: report["interaction_endpoints_added"].append({"id": target_node["id"], "role": "target"})
             else:
                 reuse={"id":target_node.get("id"),"role":"target"}
                 report["nodes_reused_for_interactions"].append(reuse);report["interaction_endpoint_reuse"].append(reuse)
             if source_node is None or target_node is None: continue
+            used_endpoints.update((source_node["id"],target_node["id"]))
+            last_endpoint[source_participant.get("id")]=source_node["id"]
+            last_endpoint[target_participant.get("id")]=target_node["id"]
             pair = (source_node["id"], target_node["id"])
+            if pair[0]==pair[1]:
+                report["self_loop_rejections"].append({"interaction_index":interaction_index,"source":pair[0],"target":pair[1]})
+                continue
             if not any(isinstance(m, Mapping) and (m.get("source"), m.get("target")) == pair for m in messages):
                 message_id = cls._unique_id("message_flow", used); used.add(message_id)
                 messages.append({"id": message_id, "source": pair[0], "target": pair[1], "properties": {}})
 
-    @staticmethod
-    def _message_endpoint(nodes, messages, participant, side, node_type, counterpart_name):
+    @classmethod
+    def _message_endpoint(cls,nodes,flows,participant,side,node_type,counterpart_name,
+                          interaction_index,used_endpoints,report):
         process_id = participant.get("processRef")
-        endpoint_ids = {m.get(side) for m in messages if isinstance(m, Mapping)}
-        candidates = [n for n in nodes if isinstance(n, dict) and n.get("processRef") == process_id
-                      and (n.get("type") == node_type or n.get("id") in endpoint_ids)]
-        if len(candidates)==1:return candidates[0]
-        role="send" if node_type=="sendTask" else "receive"
-        semantic=[n for n in nodes if isinstance(n,dict) and n.get("processRef")==process_id and
-                  (semantic_label_match(f"{role} {counterpart_name}",n.get("name")) or role in normalize_semantic_tokens(n.get("name")))]
-        return semantic[0] if len(semantic)==1 else None
+        role="source" if node_type=="sendTask" else "target";counterpart=normalize_semantic_tokens(counterpart_name)
+        send_terms={"send","inform","notify","forward","submit"};receive_terms={"receive"}
+        ranked=[];details=[]
+        for node in nodes:
+            if not isinstance(node,dict) or node.get("processRef")!=process_id or node.get("id") in used_endpoints:continue
+            node_tokens=normalize_semantic_tokens(node.get("name"));kind=node.get("type");score=0
+            if kind==node_type:score+=50
+            if role=="source" and kind=="receiveTask":continue
+            if role=="target" and kind=="sendTask":continue
+            directional=bool(node_tokens&(send_terms if role=="source" else receive_terms|send_terms))
+            if directional:score+=20
+            if counterpart and counterpart&node_tokens:score+=20
+            if semantic_label_match(f"{'send' if role=='source' else 'receive'} {counterpart_name}",node.get("name")):score+=10
+            if cls._valid_existing_endpoint(nodes,flows,node,process_id):score+=5
+            compatible=score>=50 or directional
+            details.append({"node_id":node.get("id"),"type":kind,"semantic_match":compatible,"score":score})
+            if compatible and cls._valid_existing_endpoint(nodes,flows,node,process_id):ranked.append((score,str(node.get("id")),node))
+        ranked.sort(key=lambda item:(-item[0],item[1]));selected=ranked[0][2] if ranked and (len(ranked)==1 or ranked[0][0]>ranked[1][0]) else None
+        report["interaction_endpoint_candidates"].append({"interaction_index":interaction_index,
+            "participant":participant.get("id"),"role":role,"candidates":details,
+            "selected":selected.get("id") if selected else None})
+        return selected
+
+    @staticmethod
+    def _valid_existing_endpoint(nodes,flows,node,process_id):
+        return (node.get("type") in {"sendTask","receiveTask","userTask","serviceTask","manualTask","scriptTask","businessRuleTask"}
+                and GroundedWorkflowCanonicalizer._valid_local_topology(
+                    {"nodes":nodes,"flows":flows},process_id,node.get("id")))
 
     @staticmethod
     def _has_message_between(messages,nodes,source_participant_id,target_participant_id):
@@ -279,7 +317,7 @@ class GroundedWorkflowCanonicalizer:
                    for message in messages)
 
     @classmethod
-    def insert_node_into_process_sequence(cls, workflow, participant, node_type, name, used, position, report):
+    def insert_node_into_process_sequence(cls,workflow,participant,node_type,name,used,position,report,previous_id=None):
         """Atomically insert an endpoint by splitting one local sequence flow."""
         candidate=copy.deepcopy(workflow);candidate_used=set(used)
         nodes, flows = candidate["nodes"], candidate["flows"]
@@ -287,19 +325,25 @@ class GroundedWorkflowCanonicalizer:
         local = [n for n in nodes if isinstance(n, Mapping) and n.get("processRef") == process_id]
         local_ids={n.get("id") for n in local}
         local_flows=[f for f in flows if isinstance(f,dict) and f.get("source") in local_ids and f.get("target") in local_ids]
-        boundary_type="startEvent" if position=="after_start" else "endEvent"
-        boundaries=[n for n in local if n.get("type")==boundary_type]
-        if len(boundaries)!=1:
-            report["interaction_endpoint_rollbacks"].append({"node":name,"process":process_id,"reason":"No unique boundary event"})
-            return None
-        boundary_id=boundaries[0].get("id")
-        anchors=[f for f in local_flows if (f.get("source")==boundary_id if position=="after_start" else f.get("target")==boundary_id)]
+        if position=="after_node":
+            anchors=[f for f in local_flows if f.get("source")==previous_id]
+        else:
+            boundary_type="startEvent" if position=="after_start" else "endEvent"
+            boundaries=[n for n in local if n.get("type")==boundary_type]
+            if len(boundaries)!=1:
+                report["interaction_endpoint_rollbacks"].append({"node":name,"process":process_id,"reason":"No unique boundary event"})
+                return None
+            boundary_id=boundaries[0].get("id")
+            anchors=[f for f in local_flows if (f.get("source")==boundary_id if position=="after_start" else f.get("target")==boundary_id)]
         if len(anchors)!=1:
             report["interaction_endpoint_rollbacks"].append({"node":name,"process":process_id,"reason":"No safe insertion point"})
             return None
         anchor=anchors[0]
+        if anchor.get("source")==anchor.get("target") or previous_id==anchor.get("target"):
+            report["self_loop_rejections"].append({"source":anchor.get("source"),"target":anchor.get("target"),"node":name})
+            return None
         endpoint = cls._add_node(nodes, candidate_used, f"{node_type}_{process_id}", node_type, name, process_id, participant_id)
-        if position=="after_start":
+        if position in {"after_start","after_node"}:
             successor=anchor["target"];anchor["target"]=endpoint["id"]
             new_flow=cls._add_flow(flows,candidate_used,endpoint["id"],successor,process_id)
         else:
@@ -307,6 +351,7 @@ class GroundedWorkflowCanonicalizer:
             new_flow=cls._add_flow(flows,candidate_used,predecessor,endpoint["id"],process_id)
         if not cls._valid_local_topology(candidate,process_id,endpoint["id"]):
             report["interaction_endpoint_rollbacks"].append({"node":name,"process":process_id,"reason":"Local topology validation failed"})
+            report["rewiring_validation_failures"].append({"node":endpoint["id"],"process":process_id})
             return None
         workflow["nodes"]=candidate["nodes"];workflow["flows"]=candidate["flows"]
         used.clear();used.update(candidate_used)
@@ -375,6 +420,7 @@ class GroundedWorkflowCanonicalizer:
 
     @classmethod
     def _add_flow(cls, flows, used, source, target, process_id, name=None):
+        if source==target:return None
         identifier = cls._unique_id(f"flow_{source}_{target}", used); used.add(identifier)
         flow = {"id": identifier, "source": source, "target": target, "processRef": process_id,
                 "condition": None, "isDefault": False, "properties": {"synthetic": True}}
