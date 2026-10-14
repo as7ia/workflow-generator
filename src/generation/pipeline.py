@@ -157,8 +157,10 @@ class WorkflowCompiler:
             if not self.is_meaningful_workflow(normalized):
                 return self._fail(result,"generation","La génération n'a produit aucun workflow exploitable.")
             result["pipeline_debug"]["pre_canonical_workflow"] = self._workflow_counts(normalized)
+            result["pipeline_debug"]["pre_canonical_entities"] = self._canonical_entities(normalized)
             canonical,canonicalization_report=GroundedWorkflowCanonicalizer.canonicalize(normalized,requirements)
             result["pipeline_debug"]["post_canonical_workflow"] = self._workflow_counts(canonical)
+            result["pipeline_debug"]["post_canonical_entities"] = self._canonical_entities(canonical)
             result["pipeline_debug"]["canonicalization_report"] = canonicalization_report
             prepared = preparer.prepare_normalized_and_validate(canonical,normalization_report)
             current_workflow = copy.deepcopy(prepared["workflow"])
@@ -387,6 +389,8 @@ class WorkflowCompiler:
                 "pre_canonical_workflow": None,
                 "post_canonical_workflow": None,
                 "canonicalization_report": None,
+                "pre_canonical_entities": None,
+                "post_canonical_entities": None,
             },
         }
 
@@ -509,6 +513,18 @@ class WorkflowCompiler:
         return {
             key: len(workflow.get(key, [])) if isinstance(workflow.get(key), list) else 0
             for key in ("processes", "participants", "lanes", "nodes", "flows", "messageFlows")
+        }
+
+    @staticmethod
+    def _canonical_entities(workflow: Mapping[str,Any])->dict[str,list[dict[str,Any]]]:
+        def select(key,fields):
+            values=workflow.get(key,[]) if isinstance(workflow,Mapping) else []
+            return [{field:item.get(field) for field in fields} for item in values if isinstance(item,Mapping)]
+        nodes=select("nodes",("id","type","name","processRef","participantRef"))
+        return {
+            "participants":select("participants",("id","name","processRef")),
+            "processes":select("processes",("id","name")),
+            "interaction_nodes":[node for node in nodes if node.get("type") in {"sendTask","receiveTask"}],
         }
 
     @staticmethod

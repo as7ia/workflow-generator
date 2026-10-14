@@ -1,6 +1,7 @@
 from src.workflow.canonicalization import GroundedWorkflowCanonicalizer
 from src.workflow.semantic_requirements import normalize_semantic_requirements
 from src.workflow.semantic_validator import SemanticValidator
+from src.workflow.coverage_validator import normalize_semantic_tokens, semantic_label_match
 
 
 def workflow():
@@ -129,3 +130,70 @@ def test_semantically_equivalent_receive_node_is_reused():
     assert fixed["messageFlows"][0]["target"]=="received"
     assert len([n for n in fixed["nodes"] if n["processRef"]=="process_a" and n["type"]=="receiveTask"])==0
     assert {item["id"] for item in report["nodes_reused_for_interactions"]}=={"received"}
+
+
+def test_shared_semantic_matcher_resolves_roles_and_rejects_unrelated_roles():
+    assert semantic_label_match("commercial department","sales department")
+    assert semantic_label_match("financial service","finance department")
+    assert not semantic_label_match("customer","finance")
+    assert not semantic_label_match("supplier","sales")
+    assert normalize_semantic_tokens("Service commercial")==normalize_semantic_tokens("Sales")
+
+
+def test_bidirectional_interactions_are_inserted_in_causal_local_order():
+    fixed,report=GroundedWorkflowCanonicalizer.canonicalize(workflow(),requirements(
+        participants=[{"name":"A"},{"name":"B"}],
+        interactions=[{"source":"A","target":"B"},{"source":"B","target":"A"}],
+    ))
+    participants={p["name"]:p for p in fixed["participants"]};nodes={n["id"]:n for n in fixed["nodes"]}
+    messages=fixed["messageFlows"]
+    assert len(messages)==2
+    endpoints={(nodes[m["source"]]["participantRef"],nodes[m["target"]]["participantRef"]) for m in messages}
+    assert endpoints=={(participants["A"]["id"],participants["B"]["id"]),(participants["B"]["id"],participants["A"]["id"])}
+    forbidden={"ISOLATED_TASK","MISSING_INCOMING_FLOW","MISSING_OUTGOING_FLOW","UNREACHABLE_NODE"}
+    assert forbidden.isdisjoint(issue["code"] for issue in SemanticValidator().validate(fixed))
+    assert len(report["interaction_endpoint_insertions"])==4
+
+
+def test_wrongly_owned_action_is_not_reused_as_other_participant_endpoint():
+    value=workflow()
+    value["processes"].append({"id":"process_b","name":"B","description":"","executable":False,"properties":{}})
+    value["participants"].append({"id":"participant_b","name":"B","processRef":"process_b","properties":{}})
+    value["nodes"] += [
+        {"id":"b_start","type":"startEvent","name":"Start","processRef":"process_b","participantRef":"participant_b","laneRef":None,"actor":None,"properties":{}},
+        {"id":"wrong","type":"sendTask","name":"A sends request","processRef":"process_b","participantRef":"participant_b","laneRef":None,"actor":None,"properties":{}},
+        {"id":"b_end","type":"endEvent","name":"End","processRef":"process_b","participantRef":"participant_b","laneRef":None,"actor":None,"properties":{}},
+    ]
+    value["flows"] += [
+        {"id":"b1","source":"b_start","target":"wrong","processRef":"process_b","condition":None,"isDefault":False,"properties":{}},
+        {"id":"b2","source":"wrong","target":"b_end","processRef":"process_b","condition":None,"isDefault":False,"properties":{}},
+    ]
+    fixed,_=GroundedWorkflowCanonicalizer.canonicalize(value,requirements(
+        participants=[{"name":"A"},{"name":"B"}],interactions=[{"source":"A","target":"B"}]))
+    message=fixed["messageFlows"][0];nodes={n["id"]:n for n in fixed["nodes"]}
+    assert message["source"]!="wrong"
+    assert nodes[message["source"]]["participantRef"]=="participant_a"
+    assert next(n for n in fixed["nodes"] if n["id"]=="wrong")["processRef"]=="process_b"
+
+
+def test_failed_endpoint_insertion_is_atomic():
+    value=workflow()
+    value["nodes"].append({"id":"a_end_2","type":"endEvent","name":"Alternative end","processRef":"process_a","participantRef":"participant_a","laneRef":None,"actor":None,"properties":{}})
+    before_nodes=list(value["nodes"]);before_flows=list(value["flows"])
+    fixed,report=GroundedWorkflowCanonicalizer.canonicalize(value,requirements(
+        participants=[{"name":"A"},{"name":"B"}],interactions=[{"source":"A","target":"B"}]))
+    assert [n for n in fixed["nodes"] if n.get("processRef")=="process_a"]==before_nodes
+    assert [f for f in fixed["flows"] if f.get("processRef")=="process_a"]==before_flows
+    assert not any(n.get("type")=="sendTask" and n.get("processRef")=="process_a" for n in fixed["nodes"])
+    assert report["interaction_endpoint_rollbacks"][0]["reason"]=="No unique boundary event"
+
+
+def test_participant_resolution_report_exposes_every_candidate_decision():
+    value=workflow();value["processes"].append({"id":"sales_process","name":"Sales","description":"","executable":False,"properties":{}})
+    value["participants"].append({"id":"sales","name":"Sales","processRef":"sales_process","properties":{}})
+    fixed,report=GroundedWorkflowCanonicalizer.canonicalize(value,requirements(
+        participants=[{"name":"A"},{"name":"Service commercial"}]))
+    attempt=next(item for item in report["participant_resolution_attempts"] if item["candidate_id"]=="sales" and item["requirement"]=="Service commercial")
+    assert attempt["semantic_match"] is True and attempt["decision"]=="reuse"
+    assert attempt["normalized_requirement"]==attempt["normalized_candidate"]==["sales"]
+    assert len(fixed["participants"])==2
