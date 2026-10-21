@@ -56,6 +56,17 @@ participant_beta.processRef = process_beta. Nodes owned by participant_alpha use
 process_alpha; nodes owned by participant_beta use process_beta. Communication
 between those nodes belongs in messageFlows, never flows."""
 
+_GRAPH_RULES = """Règles obligatoires de cohérence du graphe :
+- Chaque process non vide possède au moins un startEvent et un endEvent structurels.
+- Chaque activité est atteignable depuis un startEvent par des sequenceFlows locaux et peut atteindre un endEvent local.
+- Une tâche normale possède un flux entrant et un flux sortant, sauf sémantique BPMN explicitement supportée.
+- Un messageFlow ne remplace jamais la continuité locale par sequenceFlow dans le process émetteur ou récepteur.
+- Les gateways conservent toutes les branches demandées et chaque branche conditionnelle porte une condition identifiable.
+- Une boucle revient vers une activité existante sans isoler les tâches de correction et conserve une sortie vers la fin.
+- Les rôles internes d'une même organisation sont de préférence des lanes d'un process commun.
+- Crée plusieurs pools uniquement pour de véritables entités collaboratrices distinctes; ne crée pas un process par rôle interne.
+- Avant de répondre, vérifie pour chaque process les chemins start→activités→end et l'absence de sequenceFlow inter-process."""
+
 _REPAIR_RULES = """Contraintes canoniques essentielles :
 - schemaVersion vaut exactement "2.0".
 - Conserve processes, participants, lanes, nodes, flows, messageFlows et ambiguities.
@@ -70,7 +81,7 @@ _REPAIR_RULES = """Contraintes canoniques essentielles :
 def build_generation_prompt(description:str,schema:dict[str,Any])->str:
     return ("Transforme la description métier en workflow JSON canonique v2.\n\n"
         f"Description métier:\n{description}\n\nJSON Schema officiel:\n{json.dumps(schema,ensure_ascii=False,indent=2,sort_keys=True)}\n\n"
-        f"{_V2_RULES}\nConserve strictement l'intention métier. Retourne uniquement un objet JSON valide, sans Markdown ni explication.")
+        f"{_V2_RULES}\n{_GRAPH_RULES}\nConserve strictement l'intention métier. Retourne uniquement un objet JSON valide, sans Markdown ni explication.")
 
 def build_repair_prompt(workflow:dict[str,Any],errors:list[dict[str,Any]],schema:dict[str,Any],description:str|None=None,requirements:dict[str,Any]|None=None)->str:
     lines=[f"- [{e.get('code','ERROR')}] {e.get('message','Erreur non décrite')}" for e in errors if isinstance(e,dict)] or ["- Validation échouée"]
@@ -78,6 +89,9 @@ def build_repair_prompt(workflow:dict[str,Any],errors:list[dict[str,Any]],schema
     return ("Corrige uniquement les informations manquantes du workflow JSON canonique v2 sans le reconstruire inutilement.\n\n"+context+"Erreurs:\n"
         +"\n".join(lines)+f"\n\nWorkflow:\n{json.dumps(workflow,ensure_ascii=False,separators=(',',':'),sort_keys=True)}"
         f"\n\n{_REPAIR_RULES}\n"
+        f"{_GRAPH_RULES}\n"
+        "Pars du workflow fourni et applique un patch ciblé. Préserve les IDs, noms, types, décisions, conditions et branches métier non concernés. "
+        "Ne supprime aucune activité métier pour réduire le nombre d'erreurs et ne remplace jamais le workflow par un process vide. "
         "Pour MULTIPLE_PARTICIPANTS_FOR_PROCESS: Create one distinct process per participant and update participant.processRef, node.processRef, lane.processRef and flow.processRef consistently.\n"
         "Pour MESSAGE_FLOW_WITHIN_SAME_PROCESS, sépare d'abord les processes des participants si nécessaire avant de modifier le messageFlow.\n"
         "Pour INVALID_TIMER_DURATION, utilise obligatoirement une durée ISO 8601.\n"

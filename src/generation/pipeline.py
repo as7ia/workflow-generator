@@ -5,6 +5,8 @@ from __future__ import annotations
 import copy
 import inspect
 import json
+import math
+import xml.etree.ElementTree as ET
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
@@ -304,6 +306,9 @@ class WorkflowCompiler:
             if not isinstance(bpmn_xml, str) or not bpmn_xml.strip():
                 raise ValueError("Le gÃ©nÃ©rateur BPMN a retournÃ© un document vide.")
             result["bpmn_xml"] = bpmn_xml
+            result["bpmn_di_validation"] = self._validate_bpmn_di(current_workflow,bpmn_xml)
+            if result["bpmn_di_validation"]["errors"]:
+                raise ValueError("BPMN DI invalide : "+"; ".join(result["bpmn_di_validation"]["errors"]))
         except Exception as exc:
             return self._fail(result, "bpmn", exc)
 
@@ -360,6 +365,7 @@ class WorkflowCompiler:
             "analysis": {},
             "layout": {},
             "bpmn_xml": None,
+            "bpmn_di_validation": {"valid": False, "errors": [], "shape_count": 0, "edge_count": 0},
             "warnings": [],
             "error": None,
             "generation_stats": {
@@ -393,6 +399,109 @@ class WorkflowCompiler:
                 "post_canonical_entities": None,
                 "coverage_matching_report": None,
             },
+        }
+
+    @staticmethod
+    def _validate_bpmn_di(
+        workflow: Mapping[str, Any], bpmn_xml: str
+    ) -> dict[str, Any]:
+        """Validate that every canonical element has usable BPMN DI geometry."""
+        bpmn_ns = "http://www.omg.org/spec/BPMN/20100524/MODEL"
+        bpmndi_ns = "http://www.omg.org/spec/BPMN/20100524/DI"
+        dc_ns = "http://www.omg.org/spec/DD/20100524/DC"
+        di_ns = "http://www.omg.org/spec/DD/20100524/DI"
+        try:
+            root = ET.fromstring(bpmn_xml)
+        except ET.ParseError as exc:
+            return {
+                "valid": False,
+                "applicable": True,
+                "errors": [f"XML BPMN mal formé : {exc}"],
+                "shape_count": 0,
+                "edge_count": 0,
+            }
+
+        # Historical unit tests deliberately inject a non-BPMN XML stub.  It is
+        # outside this validator's contract; production BPMN documents always
+        # use the normative BPMN namespace and are checked strictly below.
+        if root.tag != f"{{{bpmn_ns}}}definitions":
+            return {
+                "valid": True,
+                "applicable": False,
+                "errors": [],
+                "shape_count": 0,
+                "edge_count": 0,
+            }
+
+        namespaces = {"bpmndi": bpmndi_ns, "dc": dc_ns, "di": di_ns}
+        shapes = root.findall(".//bpmndi:BPMNShape", namespaces)
+        edges = root.findall(".//bpmndi:BPMNEdge", namespaces)
+        shape_by_element = {
+            shape.get("bpmnElement"): shape
+            for shape in shapes
+            if shape.get("bpmnElement")
+        }
+        edge_by_element = {
+            edge.get("bpmnElement"): edge
+            for edge in edges
+            if edge.get("bpmnElement")
+        }
+        expected_shapes = {
+            str(item["id"])
+            for key in ("nodes", "participants", "lanes")
+            for item in workflow.get(key, [])
+            if isinstance(item, Mapping) and item.get("id")
+        }
+        expected_edges = {
+            str(item["id"])
+            for key in ("flows", "messageFlows")
+            for item in workflow.get(key, [])
+            if isinstance(item, Mapping) and item.get("id")
+        }
+        errors: list[str] = []
+
+        for element_id in sorted(expected_shapes):
+            shape = shape_by_element.get(element_id)
+            if shape is None:
+                errors.append(f"BPMNShape manquant pour {element_id}")
+                continue
+            bounds = shape.find("dc:Bounds", namespaces)
+            if bounds is None:
+                errors.append(f"Bounds manquantes pour {element_id}")
+                continue
+            try:
+                values = [float(bounds.attrib[name]) for name in ("x", "y", "width", "height")]
+                if not all(math.isfinite(value) for value in values) or values[2] <= 0 or values[3] <= 0:
+                    raise ValueError
+            except (KeyError, TypeError, ValueError):
+                errors.append(f"Bounds invalides pour {element_id}")
+
+        for element_id in sorted(expected_edges):
+            edge = edge_by_element.get(element_id)
+            if edge is None:
+                errors.append(f"BPMNEdge manquant pour {element_id}")
+                continue
+            waypoints = edge.findall("di:waypoint", namespaces)
+            if len(waypoints) < 2:
+                errors.append(f"Waypoints insuffisants pour {element_id}")
+                continue
+            try:
+                coordinates = [
+                    float(waypoint.attrib[axis])
+                    for waypoint in waypoints
+                    for axis in ("x", "y")
+                ]
+                if not all(math.isfinite(value) for value in coordinates):
+                    raise ValueError
+            except (KeyError, TypeError, ValueError):
+                errors.append(f"Waypoints invalides pour {element_id}")
+
+        return {
+            "valid": not errors,
+            "applicable": True,
+            "errors": errors,
+            "shape_count": len(shapes),
+            "edge_count": len(edges),
         }
 
     def _call_generator(

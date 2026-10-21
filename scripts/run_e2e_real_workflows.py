@@ -12,6 +12,11 @@ from src.generation import QwenWorkflowGenerator,WorkflowCompiler
 from src.generation.model_loader import DEFAULT_QWEN_MODEL,load_qwen_model
 
 SCENARIOS={
+ "cybersecurity_incident":"Un employé signale un incident de cybersécurité. L'équipe sécurité qualifie l'incident, contient la menace, analyse la cause puis confirme la restauration du service avant de clôturer l'incident.",
+ "insurance_refund":"Un assuré transmet une demande de remboursement. Le service sinistres vérifie les justificatifs et décide si la demande est recevable. Si elle est acceptée, le service financier rembourse l'assuré; sinon le service sinistres notifie le refus.",
+ "industrial_quality_loop":"Un opérateur fabrique une pièce puis le contrôle qualité l'inspecte. Si la pièce est non conforme, l'opérateur la corrige et elle retourne au contrôle. Lorsqu'elle est conforme, elle est libérée et le processus se termine.",
+ "customer_complaint":"Un client envoie une réclamation au service client. Le service client l'enregistre, l'équipe support l'analyse et propose une résolution, puis le service client informe le client et clôture la réclamation.",
+ "supplier_carrier_collaboration":"Une entreprise envoie une commande à un fournisseur. Le fournisseur prépare les marchandises et demande leur enlèvement à un transporteur. Le transporteur confirme l'enlèvement au fournisseur, livre l'entreprise, puis l'entreprise confirme la réception au fournisseur.",
  "linear_simple":"Un employé reçoit une demande, vérifie les informations, enregistre la demande puis clôture le dossier. Le processus possède un début et une fin.",
  "exclusive_decision":"Un analyste reçoit une demande puis décide si elle est complète. Si elle est complète, il l'approuve. Sinon, il demande une correction. Les deux branches convergent avant la clôture.",
  "parallel_work":"Après réception d'un dossier, trois contrôles sont lancés en parallèle : identité, conformité et solvabilité. Le processus attend la fin des trois contrôles, consolide les résultats puis se termine.",

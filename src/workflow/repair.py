@@ -275,6 +275,18 @@ class WorkflowRepairer:
         removed={key:sorted(original_ids[key]-candidate_ids[key]) for key in keys}
         counts=lambda workflow:{key:len(workflow.get(key,[])) if isinstance(workflow,Mapping) and isinstance(workflow.get(key),list) else 0 for key in keys}
         original_counts=counts(original);candidate_counts=counts(candidate)
+        business_types={"userTask","serviceTask","manualTask","scriptTask","businessRuleTask","sendTask","receiveTask","subProcess"}
+        original_nodes={item.get("id"):item for item in original.get("nodes",[]) if isinstance(item,Mapping) and item.get("id")}
+        candidate_nodes={item.get("id"):item for item in candidate.get("nodes",[]) if isinstance(item,Mapping) and item.get("id")}
+        modified_business_nodes=sorted(node_id for node_id,node in original_nodes.items()
+            if node.get("type") in business_types and node_id in candidate_nodes
+            and (node.get("type"),str(node.get("name") or "").strip())
+                !=(candidate_nodes[node_id].get("type"),str(candidate_nodes[node_id].get("name") or "").strip()))
+        gateway_ids={node_id for node_id,node in original_nodes.items() if node.get("type") in {"exclusiveGateway","inclusiveGateway","parallelGateway","eventBasedGateway"}}
+        original_flows={item.get("id"):item for item in original.get("flows",[]) if isinstance(item,Mapping) and item.get("id")}
+        candidate_flow_ids={item.get("id") for item in candidate.get("flows",[]) if isinstance(item,Mapping)}
+        lost_branch_flow_ids=sorted(flow_id for flow_id,flow in original_flows.items()
+            if flow.get("source") in gateway_ids and flow_id not in candidate_flow_ids)
         reason=None
         if original_counts["nodes"]>0 and candidate_counts["nodes"]==0:reason="Candidate removed all business nodes"
         elif original_counts["processes"]>0 and candidate_counts["processes"]==0:reason="Candidate removed all processes"
@@ -285,10 +297,13 @@ class WorkflowRepairer:
             reason=f"Candidate removed existing {key} IDs"
         elif original_counts["flows"]>0 and candidate_counts["flows"]==0:
             reason="Candidate removed all sequence flows"
+        elif modified_business_nodes:reason="Candidate altered existing business activities"
+        elif lost_branch_flow_ids:reason="Candidate removed existing decision branches"
         return {"original_counts":original_counts,"candidate_counts":candidate_counts,
                 "removed_process_ids":removed["processes"],"removed_participant_ids":removed["participants"],
                 "removed_lane_ids":removed["lanes"],"removed_node_ids":removed["nodes"],
                 "removed_flow_ids":removed["flows"],"removed_message_flow_ids":removed["messageFlows"],
+                "modified_business_node_ids":modified_business_nodes,"lost_branch_flow_ids":lost_branch_flow_ids,
                 "destructive_candidate":reason is not None,"rejection_reason":reason}
 
     @staticmethod
